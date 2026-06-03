@@ -5,7 +5,7 @@
 # Zero runtime dependencies beyond `git` and `bash`. Runs unchanged on macOS
 # (stock bash 3.2, BSD userland) and Linux (GNU userland).
 #
-#   https://github.com/chrisren/worktree-harness   (see README.md, docs/DESIGN.md)
+#   https://github.com/renchris/worktree-harness   (see README.md, docs/DESIGN.md)
 set -euo pipefail
 
 # --- locate our own lib/, following an install symlink ---------------------

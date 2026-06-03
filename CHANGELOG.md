@@ -32,5 +32,5 @@ Initial release.
   Linux and macOS, an explicit run under system bash 3.2, and an install smoke
   test.
 
-[Unreleased]: https://github.com/chrisren/worktree-harness/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/chrisren/worktree-harness/releases/tag/v0.1.0
+[Unreleased]: https://github.com/renchris/worktree-harness/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/renchris/worktree-harness/releases/tag/v0.1.0

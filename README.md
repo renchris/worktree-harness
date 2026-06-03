@@ -4,7 +4,7 @@ Run many parallel coding-agent sessions — Claude Code, Aider, Codex, whatever 
 each in its own isolated **git worktree**, and fast-forward them back to your
 default branch **safely**. Zero runtime dependencies beyond `git` and `bash`.
 
-[![ci](https://github.com/chrisren/worktree-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/chrisren/worktree-harness/actions/workflows/ci.yml)
+[![ci](https://github.com/renchris/worktree-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/renchris/worktree-harness/actions/workflows/ci.yml)
 
 ```console
 $ worktree-harness new add-auth
@@ -59,13 +59,13 @@ than silently falling back.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/chrisren/worktree-harness/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh
 ```
 
 Or from a checkout:
 
 ```sh
-git clone https://github.com/chrisren/worktree-harness && ./worktree-harness/install.sh
+git clone https://github.com/renchris/worktree-harness && ./worktree-harness/install.sh
 ```
 
 It installs to `~/.local` by default (override with `WORKTREE_HARNESS_PREFIX`):

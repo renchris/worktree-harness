@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # install.sh — install worktree-harness. POSIX sh (works under `curl ... | sh`).
 #
-#   curl -fsSL https://raw.githubusercontent.com/chrisren/worktree-harness/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh
 #   ./install.sh                      # from a checkout
 #
 # Layout: copies bin/ lib/ share/ to $PREFIX/share/worktree-harness and symlinks
@@ -9,7 +9,7 @@
 # WORKTREE_HARNESS_PREFIX (default: ~/.local). No sudo, no global state.
 set -eu
 
-REPO_URL="${WORKTREE_HARNESS_REPO:-https://github.com/chrisren/worktree-harness.git}"
+REPO_URL="${WORKTREE_HARNESS_REPO:-https://github.com/renchris/worktree-harness.git}"
 PREFIX="${WORKTREE_HARNESS_PREFIX:-$HOME/.local}"
 SHARE_DIR="$PREFIX/share/worktree-harness"
 BIN_DIR="$PREFIX/bin"
