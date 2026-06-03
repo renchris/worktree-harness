@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# worktree-harness — run many parallel coding-agent sessions, each in its own
+# isolated git worktree, with safe fast-forward-only merge-back.
+#
+# Zero runtime dependencies beyond `git` and `bash`. Runs unchanged on macOS
+# (stock bash 3.2, BSD userland) and Linux (GNU userland).
+#
+#   https://github.com/chrisren/worktree-harness   (see README.md, docs/DESIGN.md)
+set -euo pipefail
+
+# --- locate our own lib/, following an install symlink ---------------------
+# Runs before compat.sh is sourced, so the symlink resolver is inlined here.
+_wh_bootstrap_dir() {
+  local src="$1" dir
+  while [ -h "$src" ]; do
+    dir="$( cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd )"
+    src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+  done
+  ( cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd )
+}
+
+_wh_usage() {
+  cat >&2 <<'EOF'
+worktree-harness — parallel agent sessions in isolated git worktrees, safely.
+
+USAGE
+  worktree-harness [-C <dir>] [--dry-run] [--no-color] <command> [args]
+
+COMMANDS
+  new <branch>          Create a runnable worktree off the base branch: copy
+                        gitignored files, install deps, run setup, assign ports.
+  launch [-- <cmd...>]  Create an auto-named worktree and exec your agent in it;
+                        when already inside a linked worktree, exec in place.
+  merge                 Rebase this worktree's branch onto the base, run the
+                        merge gate, fast-forward the LOCAL base branch. Never pushes.
+  status [--porcelain]  List worktrees: branch, ahead/behind, dirty, ports.
+  gc [--prune]          Remove merged + clean + idle worktrees (branches preserved).
+  init                  Scaffold a starter .harnessrc (detects your package manager).
+  doctor                Diagnose the environment and validate .harnessrc.
+  version | help
+
+GLOBAL FLAGS
+  -C <dir>     Run as if started in <dir>.
+  --dry-run    Print the actions a command would take; change nothing.
+  --no-color   Disable ANSI color.
+
+Run `worktree-harness <command> --help` for command-specific options.
+Docs: README.md · docs/DESIGN.md
+EOF
+}
+
+main() {
+  local bindir; bindir="$(_wh_bootstrap_dir "${BASH_SOURCE[0]}")"
+  WH_LIB="$(cd "$bindir/../lib" >/dev/null 2>&1 && pwd || true)"
+  [ -n "$WH_LIB" ] && [ -d "$WH_LIB" ] || { echo "worktree-harness: cannot find lib/ near $bindir" >&2; exit 1; }
+  WH_SHARE="$(cd "$bindir/../share" >/dev/null 2>&1 && pwd || echo "$bindir/../share")"
+  export WH_LIB WH_SHARE
+
+  # shellcheck source=../lib/common.sh
+  . "$WH_LIB/common.sh"
+  # shellcheck source=../lib/compat.sh
+  . "$WH_LIB/compat.sh"
+
+  # Global flags, before the subcommand.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -C)           shift; cd "${1:?-C needs a directory}" || wh_die "cannot cd to $1" ;;
+      --dry-run)    WH_DRY_RUN=1 ;;
+      --no-color)   WH_NO_COLOR=1 ;;
+      -h|--help)    _wh_usage; return 0 ;;
+      -V|--version) echo "worktree-harness $WH_VERSION"; return 0 ;;
+      --)           shift; break ;;
+      -*)           wh_die "unknown global flag: $1 (try: worktree-harness --help)" ;;
+      *)            break ;;
+    esac
+    shift
+  done
+  export WH_DRY_RUN="${WH_DRY_RUN:-0}"
+
+  local cmd="${1:-help}"; shift 2>/dev/null || true
+  case "$cmd" in
+    new|create)
+      # shellcheck source=../lib/config.sh
+      . "$WH_LIB/config.sh"
+      # shellcheck source=../lib/pm.sh
+      . "$WH_LIB/pm.sh"
+      # shellcheck source=../lib/cmd_new.sh
+      . "$WH_LIB/cmd_new.sh"
+      wh_cmd_new "$@" ;;
+    launch|run)
+      # shellcheck source=../lib/config.sh
+      . "$WH_LIB/config.sh"
+      # shellcheck source=../lib/pm.sh
+      . "$WH_LIB/pm.sh"
+      # shellcheck source=../lib/cmd_new.sh
+      . "$WH_LIB/cmd_new.sh"
+      # shellcheck source=../lib/cmd_launch.sh
+      . "$WH_LIB/cmd_launch.sh"
+      wh_cmd_launch "$@" ;;
+    merge|land)
+      # shellcheck source=../lib/config.sh
+      . "$WH_LIB/config.sh"
+      # shellcheck source=../lib/cmd_merge.sh
+      . "$WH_LIB/cmd_merge.sh"
+      wh_cmd_merge "$@" ;;
+    gc|prune)
+      # shellcheck source=../lib/config.sh
+      . "$WH_LIB/config.sh"
+      # shellcheck source=../lib/cmd_gc.sh
+      . "$WH_LIB/cmd_gc.sh"
+      wh_cmd_gc "$@" ;;
+    status|ls|list)
+      # shellcheck source=../lib/config.sh
+      . "$WH_LIB/config.sh"
+      # shellcheck source=../lib/cmd_status.sh
+      . "$WH_LIB/cmd_status.sh"
+      wh_cmd_status "$@" ;;
+    init)
+      # shellcheck source=../lib/config.sh
+      . "$WH_LIB/config.sh"
+      # shellcheck source=../lib/pm.sh
+      . "$WH_LIB/pm.sh"
+      # shellcheck source=../lib/cmd_init.sh
+      . "$WH_LIB/cmd_init.sh"
+      wh_cmd_init "$@" ;;
+    doctor)
+      # shellcheck source=../lib/config.sh
+      . "$WH_LIB/config.sh"
+      # shellcheck source=../lib/pm.sh
+      . "$WH_LIB/pm.sh"
+      # shellcheck source=../lib/cmd_doctor.sh
+      . "$WH_LIB/cmd_doctor.sh"
+      wh_cmd_doctor "$@" ;;
+    help|--help|-h)       _wh_usage ;;
+    version|--version|-V) echo "worktree-harness $WH_VERSION" ;;
+    *) wh_err "unknown command: $cmd"; _wh_usage; exit 64 ;;
+  esac
+}
+
+main "$@"
