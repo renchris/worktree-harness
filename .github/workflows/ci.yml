@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck v0.11.0
+        run: |
+          ver=v0.11.0
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.x86_64.tar.xz" | tar -xJ
+          sudo install "shellcheck-${ver}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
+      - name: Lint bash sources
+        run: shellcheck bin/worktree-harness lib/*.sh share/shell/bash.sh
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats-core
+        run: |
+          git clone --depth 1 https://github.com/bats-core/bats-core "$RUNNER_TEMP/bats"
+          echo "$RUNNER_TEMP/bats/bin" >> "$GITHUB_PATH"
+      - name: Run test suite
+        run: bats test/
+      # The headline promise is "runs on stock macOS /bin/bash (3.2)". GitHub's
+      # macOS runner may default to a newer brew bash, so re-run forcing /bin
+      # first on PATH → `env bash` resolves to the system 3.2.57.
+      - name: Re-run under system bash 3.2 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          /bin/bash --version | head -1
+          PATH="/bin:/usr/bin:/sbin:/usr/sbin:$RUNNER_TEMP/bats/bin" bats test/
+
+  install:
+    name: install.sh smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install into a temp prefix and run --version
+        run: |
+          WORKTREE_HARNESS_PREFIX="$RUNNER_TEMP/prefix" sh ./install.sh
+          "$RUNNER_TEMP/prefix/bin/worktree-harness" --version
