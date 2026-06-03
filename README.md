@@ -6,6 +6,8 @@ default branch **safely**. Zero runtime dependencies beyond `git` and `bash`.
 
 [![ci](https://github.com/renchris/worktree-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/renchris/worktree-harness/actions/workflows/ci.yml)
 
+![worktree-harness demo: new → status → merge → gc](docs/demo.gif)
+
 ```console
 $ worktree-harness new add-auth
 → fetch origin main
