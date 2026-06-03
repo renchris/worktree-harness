@@ -62,7 +62,9 @@ wh_cmd_gc() {
     if wh_has lsof && lsof -- "$wt" 2>/dev/null | grep -q .; then
       wh_info "KEEP   $base [${br:-detached}] — open by a live process"; continue
     fi
-    if [ -n "$(find "$wt" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -mmin "-$idle" 2>/dev/null | head -1)" ]; then
+    # idle=0 disables the recency gate. Skip the find entirely rather than rely
+    # on `find -mmin -0`, whose meaning differs across BSD find builds.
+    if [ "$idle" -gt 0 ] && [ -n "$(find "$wt" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -mmin "-$idle" 2>/dev/null | head -1)" ]; then
       wh_info "KEEP   $base [${br:-detached}] — modified <${idle} min ago"; continue
     fi
     if [ -z "$br" ]; then
