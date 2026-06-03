@@ -1,10 +1,26 @@
 # Threat model
 
 `worktree-harness` is a developer tool that runs in your own repositories on
-your own machine. This documents what it trusts, what it protects, and what is
-out of scope — so you can reason about running it and reading its code.
+your own machine. It **trusts** your `.harnessrc` as code, **protects** your
+branches and secrets from the specific ways parallel sessions lose work, and
+deliberately **does not** sandbox malicious repositories. This documents each —
+so you can reason about running it and reading its code.
 
-## Trust boundary
+## What it trusts: your `.harnessrc`, run as code
+
+```
+              ┌─ TRUSTS ──────────────────────────────────────────┐
+ you, in a    │  .harnessrc, sourced as bash  +  the install /     │
+ repo you ───►│  setup commands it names                           │
+ trust        │  (same trust as  make · npm postinstall · just)    │
+              └────────────────────┬───────────────────────────────┘
+                                   │
+        WRITES only ───────────────┼──► repo · $HARNESS_WORKTREE_HOME · $PREFIX (install)
+                                   │
+        NETWORK ───────────────────┼──► git fetch <remote> <branch>  (read-only; origin policy only)
+                                   │
+        NEVER ─────────────────────┴──► push · sudo · setuid · privilege escalation
+```
 
 - **`.harnessrc` is sourced as bash.** Running `worktree-harness` in a repo
   executes that repo's `.harnessrc`, plus the install/setup commands it names.
@@ -19,7 +35,7 @@ out of scope — so you can reason about running it and reading its code.
 - **No privilege escalation.** No sudo, no setuid. It writes only inside the
   repo, the configured worktree home, and `$PREFIX` at install time.
 
-## What it protects
+## What it protects, and how
 
 | Risk | Mitigation |
 |---|---|
@@ -31,7 +47,7 @@ out of scope — so you can reason about running it and reading its code.
 | Secrets world-readable in a copied env file | Copied `*.env*` files are `chmod 0600` |
 | A failed isolation step running an agent un-isolated | `launch` fails **closed** — refuses to launch rather than silently fall back |
 
-## Out of scope (non-threats)
+## What it deliberately does not protect
 
 - **Malicious repositories.** `.harnessrc` is trusted code, by design. This is a
   same-machine dev tool, not a sandbox.
@@ -43,7 +59,8 @@ out of scope — so you can reason about running it and reading its code.
 - **Concurrent generation of shared derived state** (migration journals,
   lockfiles). Structural isolation does not cover semantic collisions there;
   they surface as a conflict or a failed gate, not silent corruption (see
-  [DESIGN](DESIGN.md) → "The one edge").
+  [DESIGN](DESIGN.md) → "Structural isolation covers staging collisions, not
+  semantic collisions").
 
 ## Reporting
 

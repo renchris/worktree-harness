@@ -1,10 +1,12 @@
 # Design
 
-`worktree-harness` is built on one observation and a few disciplines that follow
-from it. This document explains the *why* — the parts worth understanding before
-you trust a tool to move your branches around.
+`worktree-harness` follows from one structural fact — a git worktree has its own
+index, HEAD, and reflog — and the disciplines that fact makes possible: no lock,
+isolate-or-refuse, fast-forward-only landing behind a gate, an explicit base, and
+conservative cleanup. This document is the *why* behind each — the parts worth
+understanding before you trust a tool to move your branches around.
 
-## The one idea: structural isolation
+## The whole design follows from one structural fact: each worktree has its own index
 
 Run several coding agents on a single checkout and they share **one git index**.
 The moment one session stages with `git add -A` (or an agent commits "all
@@ -41,7 +43,7 @@ structural, not cooperative.
         refs/heads/{ main, A, B, C }
 ```
 
-## Why there is no lock
+## No lock is needed — the only shared mutable state is refs, which git already serializes
 
 A lock exists to serialize access to a shared mutable resource. After worktrees,
 the only shared mutable thing is `refs/heads/*` — and git already serializes ref
@@ -58,23 +60,21 @@ What still needs ordering is **landing** branches — and that's handled by
 fast-forward-only discipline plus git's own ref lock, not a tool-level lock (see
 below).
 
-## `launch`: isolate, or refuse — never silently fall back
+## `launch` isolates before it runs your agent — or refuses, never silently falling back
 
-```
- type `claude`  (with the shell integration, or `worktree-harness launch`)
-      │
-      ▼
- inside a git repo?
-   ├─ no ─────────────────► exec in place (nothing to isolate)
-   ├─ linked worktree ────► exec in place (already isolated; never nest)
-   └─ MAIN checkout ──────► create a worktree off the base, exec the agent there
-                              ├─ success ► cd worktree → exec agent
-                              └─ FAILURE ► REFUSE to launch (exit non-zero)
+```mermaid
+flowchart TD
+    A[type claude — shell integration, or worktree-harness launch] --> B{inside a git repo?}
+    B -- no --> P[exec in place — nothing to isolate]
+    B -- linked worktree --> P2[exec in place — already isolated, never nest]
+    B -- MAIN checkout --> C[create a worktree off the base, exec the agent there]
+    C -- success --> D[cd worktree → exec agent]
+    C -- FAILURE --> R[REFUSE to launch, exit ≠ 0]
 ```
 
-The last line matters. If creating the worktree fails, the launcher does **not**
-quietly run the agent on the main checkout — it exits non-zero and tells you to
-fix it (or set `WH_ISOLATION_SKIP=1` to opt out explicitly).
+The last branch matters. If creating the worktree fails, the launcher does
+**not** quietly run the agent on the main checkout — it exits non-zero and tells
+you to fix it (or set `WH_ISOLATION_SKIP=1` to opt out explicitly).
 
 This is the **fail-open lesson**, learned the hard way: a guard that silently
 does nothing when it can't do its job is worse than no guard, because you *think*
@@ -82,34 +82,30 @@ you're protected. A `PreToolUse`-style hook that errors and is ignored "fails
 open" — it lets the unsafe thing through. So isolation here **fails closed**: no
 worktree, no launch.
 
-## `merge`: fast-forward-only, gated, and it never pushes
+## `merge` lands fast-forward-only, behind your gate, and never pushes
 
 Landing a branch is where the real damage happens — a non-fast-forward clobber,
 a stale-remote push, a "looks merged but didn't typecheck" regression. `merge`
-makes the boring, safe move in one command:
+makes the boring, safe move in one command (the base is `origin/<default>` when
+`HARNESS_BASE_POLICY=origin`, else your local `<default>`):
 
-```
- worktree-harness merge        (run from inside the worktree)
-      │
- clean working tree? ──no──► stop: commit (explicit paths) first
-      │ yes
- already landed? ──yes──► done, nothing to do
-      │ no
- rebase branch onto the base   (origin/<default> if policy=origin, else local <default>)
-      │  └─ conflict git can't auto-resolve ──► stop, tell you how to resolve/abort. base untouched.
-      ▼
- ancestry gate: is <default> an ancestor of the rebased branch?
-      ├─ no ──► REFUSE. the base diverged; moving it would not be a fast-forward.
-      └─ yes
-      ▼
- merge gate: run HARNESS_MERGE_GATE (e.g. typecheck) on the rebased tree
-      │  └─ fails ──► stop. base NOT updated.
-      ▼
- fast-forward the LOCAL <default> to the branch tip
-      ├─ <default> checked out somewhere → `git merge --ff-only` there
-      └─ checked out nowhere → ref-only `git fetch . <branch>:<default>` (no working tree touched)
-      ▼
- done. NEVER pushes.
+```mermaid
+flowchart TD
+    M["worktree-harness merge — run from inside the worktree"] --> A{"clean working tree?"}
+    A -- no --> A1["stop: commit explicit paths first"]
+    A -- yes --> B{"already landed?"}
+    B -- yes --> B1["done — nothing to do"]
+    B -- no --> C["rebase branch onto the base"]
+    C -- "conflict git cannot auto-resolve" --> C1["stop: how to resolve / abort — base untouched"]
+    C -- clean --> D{"is the default branch an ancestor of the rebased branch?"}
+    D -- no --> D1["REFUSE — base diverged; the move would not be a fast-forward"]
+    D -- yes --> E{"HARNESS_MERGE_GATE passes on the rebased tree?"}
+    E -- no --> E1["stop — base NOT updated"]
+    E -- yes --> F{"is the default branch checked out somewhere?"}
+    F -- yes --> F1["git merge --ff-only there"]
+    F -- no --> F2["ref-only: git fetch . branch:default — no working tree touched"]
+    F1 --> G["done — NEVER pushes"]
+    F2 --> G
 ```
 
 Three deliberate properties:
@@ -131,7 +127,7 @@ Concurrent merge-backs serialize naturally: each is a fast-forward of one ref,
 and git's per-ref lock orders them in microseconds. A non-fast-forward is
 rejected, so a race can never clobber — the loser just re-rebases and retries.
 
-## Base policy: origin-canonical vs. local-canonical
+## Base policy is explicit because "origin is canonical" is wrong for solo and diverged-fork workflows
 
 Most repos: `origin/main` is the truth, you branch off it, you push back. That's
 the default (`HARNESS_BASE_POLICY=origin`): fetch, branch off `origin/<default>`,
@@ -148,7 +144,7 @@ canonical and even silently no-ops on non-GitHub remotes
 touching the network. It's a first-class option precisely because the
 origin-canonical assumption, baked in everywhere else, is wrong for this case.
 
-## `gc`: conservative by construction
+## `gc` keeps anything it isn't certain is disposable
 
 `gc` removes a worktree only if it passes **every** gate — clean tree, fully
 merged into the default branch, not busy, not open by a live process, and idle
@@ -159,7 +155,7 @@ reason. **Branches are always preserved** (delete merged ones yourself with
 The bias is intentional: the cost of keeping a worktree too long is a little
 disk; the cost of reaping one with unmerged or in-flight work is lost work.
 
-## The one edge structural isolation does *not* cover
+## Structural isolation covers staging collisions, not semantic collisions in shared derived state
 
 Separate indexes prevent *staging* collisions. They do **not** prevent
 *semantic* collisions in **shared derived state** — artifacts two worktrees both
@@ -177,7 +173,7 @@ the exact same moment*, and let the gate catch it if you do.
 entirely by registering it in the repo's local `.git/info/exclude`, so it never
 trips the clean-tree or dirty gates.
 
-## Non-goals
+## Non-goals: what `worktree-harness` deliberately is not
 
 - **Not a TUI/GUI.** It's a set of composable shell commands with clean exit
   codes — wire it into scripts, hooks, and CI. For watching many agents
