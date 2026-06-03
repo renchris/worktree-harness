@@ -5,9 +5,19 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.2.0]
+
 ### Added
-- Homebrew install: `brew install renchris/tap/worktree-harness` (tap: [renchris/homebrew-tap](https://github.com/renchris/homebrew-tap)).
-- Animated demo GIF in the README.
+- Shell completions for bash, zsh, and fish (installed by the Homebrew formula;
+  shipped under `share/completions/` for the installer).
+- Homebrew install: `brew install renchris/tap/worktree-harness`
+  (tap: [renchris/homebrew-tap](https://github.com/renchris/homebrew-tap)), with
+  a **bottled** formula so install pours a prebuilt package instead of building
+  from source on supported platforms.
+- Animated demo GIF in the README, plus a hosted
+  [asciinema player](https://renchris.github.io/worktree-harness/) for crisp,
+  selectable-text playback.
+- `SECURITY.md` documenting the trust model and reporting process.
 
 ## [0.1.0]
 
@@ -36,5 +46,6 @@ Initial release.
   Linux and macOS, an explicit run under system bash 3.2, and an install smoke
   test.
 
-[Unreleased]: https://github.com/renchris/worktree-harness/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/renchris/worktree-harness/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/renchris/worktree-harness/releases/tag/v0.2.0
 [0.1.0]: https://github.com/renchris/worktree-harness/releases/tag/v0.1.0

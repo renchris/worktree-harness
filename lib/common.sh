@@ -9,7 +9,7 @@
 # the dispatcher and command files that source this. shellcheck can't see that
 # cross-file usage when linting this file in isolation, hence the disable.
 # shellcheck disable=SC2034
-WH_VERSION="0.1.0"
+WH_VERSION="0.2.0"
 
 # Color only for an interactive stderr, unless disabled. Honors NO_COLOR
 # (https://no-color.org) and an explicit WH_NO_COLOR=1.

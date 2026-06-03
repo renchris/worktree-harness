@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>worktree-harness — demo</title>
+  <meta name="description" content="worktree-harness: parallel coding-agent sessions in isolated git worktrees, with safe fast-forward-only merge-back.">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.min.css">
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; background: #15141b; color: #e0def4;
+      font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 2.5rem 1rem; gap: 1.25rem;
+    }
+    h1 { margin: 0; font-size: 1.4rem; font-weight: 650; letter-spacing: -0.01em; }
+    h1 code { color: #9ccfd8; }
+    p { margin: 0; opacity: 0.8; text-align: center; max-width: 46rem; }
+    a { color: #c4a7e7; }
+    #player { width: min(1000px, 96vw); }
+    .links { display: flex; gap: 1.5rem; font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+  <h1><code>worktree-harness</code></h1>
+  <p>Parallel coding-agent sessions in isolated git worktrees, with safe
+     fast-forward-only merge-back. Zero dependencies beyond <code>git</code> and <code>bash</code>.</p>
+  <div id="player"></div>
+  <div class="links">
+    <a href="https://github.com/renchris/worktree-harness">Repository</a>
+    <a href="https://github.com/renchris/worktree-harness#install">Install</a>
+    <a href="https://github.com/renchris/worktree-harness/blob/main/docs/DESIGN.md">Design</a>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.min.js"></script>
+  <script>
+    AsciinemaPlayer.create('demo.cast', document.getElementById('player'), {
+      autoPlay: true, loop: true, theme: 'dracula', idleTimeLimit: 1.5, fit: 'width', poster: 'npt:0:03'
+    });
+  </script>
+</body>
+</html>

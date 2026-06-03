@@ -48,4 +48,7 @@ echo "    $SHARE_DIR/share/shell/bash.sh"
 echo "    $SHARE_DIR/share/shell/zsh.sh"
 echo "    $SHARE_DIR/share/shell/fish.fish"
 echo
+echo "  optional: shell completions are under $SHARE_DIR/share/completions/"
+echo "    (bash: source worktree-harness.bash · zsh: add the dir to fpath · fish: copy *.fish)"
+echo
 echo "  get started:   worktree-harness init  &&  worktree-harness new my-feature"

@@ -1,0 +1,32 @@
+#compdef worktree-harness
+# zsh completion for worktree-harness
+
+_worktree_harness() {
+  local -a cmds
+  cmds=(
+    'new:create a runnable worktree off the base branch'
+    'launch:create a worktree and exec your agent in it'
+    'merge:rebase + gate + fast-forward the default branch (never pushes)'
+    'gc:remove merged + clean + idle worktrees'
+    'status:list worktrees (branch, ahead/behind, ports)'
+    'init:scaffold a .harnessrc'
+    'doctor:diagnose the environment and validate .harnessrc'
+    'help:show help'
+    'version:show version'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'worktree-harness command' cmds
+    return
+  fi
+
+  case "${words[2]}" in
+    new|launch|init) _arguments '--dry-run[preview without changing anything]' '--help[show help]' ;;
+    merge)           _arguments '--no-verify[skip the merge gate]' '--dry-run[preview]' '--help[show help]' ;;
+    gc)              _arguments '--prune[actually remove (default is dry-run)]' '--dry-run[preview]' '--help[show help]' ;;
+    status)          _arguments '--porcelain[tab-separated machine output]' '--help[show help]' ;;
+    doctor)          _arguments '--help[show help]' ;;
+  esac
+}
+
+_worktree_harness "$@"

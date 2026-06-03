@@ -8,6 +8,8 @@ default branch **safely**. Zero runtime dependencies beyond `git` and `bash`.
 
 ![worktree-harness demo: new → status → merge → gc](docs/demo.gif)
 
+▶ **[Watch the interactive player](https://renchris.github.io/worktree-harness/)** — crisp, selectable-text playback (asciinema).
+
 ```console
 $ worktree-harness new add-auth
 → fetch origin main
@@ -115,6 +117,13 @@ source ~/.local/share/worktree-harness/share/shell/zsh.sh
 
 Now typing `claude` in a project root spins up an isolated worktree and launches
 the agent there. Override once with `WH_ISOLATION_SKIP=1 claude`.
+
+### Shell completions
+
+The Homebrew formula installs bash, zsh, and fish completions automatically. With
+the `curl` installer they ship under
+`~/.local/share/worktree-harness/share/completions/` — source the one for your
+shell (e.g. add `source .../worktree-harness.bash` to `~/.bashrc`).
 
 ## Configuration — `.harnessrc`
 
