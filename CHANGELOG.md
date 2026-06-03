@@ -5,6 +5,10 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- Homebrew install: `brew install renchris/tap/worktree-harness` (tap: [renchris/homebrew-tap](https://github.com/renchris/homebrew-tap)).
+- Animated demo GIF in the README.
+
 ## [0.1.0]
 
 Initial release.

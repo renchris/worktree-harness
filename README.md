@@ -60,6 +60,14 @@ than silently falling back.
 
 ## Install
 
+**Homebrew** (macOS / Linux):
+
+```sh
+brew install renchris/tap/worktree-harness
+```
+
+**Or** the zero-dependency installer:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh
 ```
