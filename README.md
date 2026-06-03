@@ -1,8 +1,6 @@
 # worktree-harness
 
-Run many parallel coding-agent sessions — Claude Code, Aider, Codex, whatever —
-each in its own isolated **git worktree**, and fast-forward them back to your
-default branch **safely**. Zero runtime dependencies beyond `git` and `bash`.
+**Run many coding agents in parallel — each in its own git worktree, each fast-forwarded back to your default branch safely — with nothing on your machine but `git` and `bash`.** Claude Code, Aider, Codex, whatever; the worktrees don't care.
 
 [![ci](https://github.com/renchris/worktree-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/renchris/worktree-harness/actions/workflows/ci.yml)
 
@@ -24,41 +22,118 @@ $ worktree-harness merge        # rebase onto main, run your gate, fast-forward 
 $ worktree-harness gc --prune   # reap merged + idle worktrees (your branches are kept)
 ```
 
+Three agents, three branches, three clean fast-forwards onto your local `main` — and nothing pushed until you say so:
+
+```
+ time ──────────────────────────────────────────────────────►
+ add-auth:   new·edit·commit──merge───────────────────────gc
+ fix-123:        new·edit·commit────────merge─────────────gc
+ refactor:           new·edit·commit──────────────merge───gc
+
+ main:              A───────────B───────────────────C────►
+                    ▲           ▲                    ▲
+               ff-only      ff-only              ff-only      (never pushes)
+```
+
 ---
 
-## Why
+## Running parallel agents on one checkout breaks in five specific ways
 
-Running several agents at once on one checkout is a footgun: they share one git
-index, so one session's `git add -A` quietly sweeps another's staged files, and
-they collide on dev/inspector ports. The fix is one idea:
+You're running more than one coding agent at once — Claude Code in one pane, Aider in another — against the same repo. On a single shared checkout, five concrete things go wrong:
 
-> **Give each session its own git worktree.** Each worktree has its own index,
-> HEAD, and working tree, so the staged-file collision is *physically
-> impossible* — there's no shared staging area to clobber. No lock file, no
-> daemon, no coordination. The isolation is structural.
+- **One git index, shared.** One session's `git add -A` (or an agent committing "all changes") sweeps another session's half-staged work into the wrong commit.
+- **Ports collide.** Two dev servers want `:3000`; two inspectors want `:9229`.
+- **A fresh worktree won't run.** `git worktree add` gives you a tree with no `.env`, no `node_modules`, no local DB — it won't start without hand-wiring.
+- **Landing the branch back is where the damage happens.** A non-fast-forward clobber of `main`, a "looked merged but never typechecked" regression, or an accidental push to a stale remote.
+- **Existing tooling assumes `origin` is canonical** and silently no-ops on non-GitHub remotes — wrong for the solo / diverged-fork workflow where your *local* branch is the truth.
 
-`git` already gives you that. What it *doesn't* give you is the boring glue that
-makes a fresh worktree actually runnable and a finished one safe to land:
+The fix is one idea — **give each session its own git worktree** — and four disciplines that follow from it. Each worktree has its own index, HEAD, and reflog, so the collision isn't *coordinated away*, it's *impossible*. `worktree-harness` is the small, dependency-free glue that makes that worktree runnable and safe to land — and nothing more.
 
-- A fresh worktree has none of your gitignored runtime state — no `.env`, no
-  `node_modules`, no local DB — and it'll fight other worktrees for ports.
-- Landing a branch back is where people get hurt: a stray `git add -A`, a
-  non-fast-forward clobber, an accidental push to a stale remote.
+## Isolation is structural, not cooperative
 
-`worktree-harness` is that glue, and nothing more:
+Each session gets its own worktree at `~/.worktrees/<repo>/<branch>`, with its own index, HEAD, and reflog, all backed by the one shared object store. The staged-file collision isn't prevented by a lock — there is no shared staging area to collide on, so it cannot happen.
 
-- **`new` / `launch`** — create a worktree off your base branch and make it
-  runnable: copy declared gitignored files, run the right install command,
-  assign non-colliding ports, run your setup.
-- **`merge`** — rebase the branch onto the base, run a verify gate, and
-  **fast-forward your local default branch**. It refuses anything that isn't a
-  clean fast-forward, and it **never pushes**.
-- **`gc`** — remove worktrees that are merged, clean, and idle. Your branches
-  are always kept.
+```
+ you, in N panes        (type `claude`, or `worktree-harness launch claude`)
+ ┌───────────┬───────────┬───────────┐
+ │  pane 1   │  pane 2   │  pane 3   │
+ └─────┬─────┴─────┬─────┴─────┬─────┘
+       │           │           │   from the MAIN checkout (.git is a dir) → isolate
+       ▼           ▼           ▼
+ ┌───────────┬───────────┬───────────┐
+ │  wt: A    │  wt: B    │  wt: C    │  separate working tree
+ │ branch A  │ branch B  │ branch C  │  separate index · HEAD · reflog
+ │ base:main │ base:main │ base:main │  branched off the base at creation
+ │ own ports │ own ports │ own ports │  .env copied · deps installed · .harness.env
+ └─────┬─────┴─────┬─────┴─────┬─────┘
+       └───────────┼───────────┘
+                   ▼
+        one shared  <repo>/.git    (objects + refs; content-addressed, atomic)
+        refs/heads/{ main, A, B, C }
+```
 
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the full argument, including why
-there is no lock and why a failed isolation step *refuses to launch* rather
-than silently falling back.
+That is why there is **no lock and no daemon**. The only shared mutable thing left is `refs/heads/*`, and git already serializes ref updates with a per-ref lock held for microseconds. (An earlier version of this idea carried a session-long writer lock; it blocked other sessions for zero safety benefit — the worktrees had already removed the collision it guarded — so it was deleted.)
+
+The launcher follows the same principle: from your main checkout it isolates *before* running your agent, and if it can't, it **refuses to launch** rather than run un-isolated.
+
+```mermaid
+flowchart TD
+    A[type claude / worktree-harness launch] --> B{in a git repo?}
+    B -- no --> P[exec in place — nothing to isolate]
+    B -- linked worktree --> P2[exec in place — already isolated, never nest]
+    B -- MAIN checkout --> C[create a worktree off the base, provision, exec there]
+    C -- success --> D[cd worktree → exec the agent]
+    C -- FAILURE --> R[REFUSE to launch, exit ≠ 0 — never runs un-isolated]
+```
+
+A guard that silently does nothing when it fails is worse than no guard, because you *think* you're protected. Isolation here fails closed: no worktree, no launch (`WH_ISOLATION_SKIP=1` opts out explicitly).
+
+## A fresh worktree arrives runnable
+
+`git worktree add` hands you an empty tree; `new` makes it actually work, in the order you'd do it by hand:
+
+- **Copies your gitignored state** — the files you declare in `HARNESS_COPY` (`.env`, `.env.local`, …), with `chmod 0600` on anything matching `*.env*` so secrets aren't world-readable.
+- **Runs the frozen-lockfile install** for your package manager, auto-detected from the lockfile: pnpm, npm, yarn (classic + berry), bun, uv, poetry, pipenv, pip, cargo, go.
+- **Assigns non-colliding ports** by offset and writes them to `<worktree>/.harness.env` — `source` it and your dev server and inspector won't fight the other worktrees.
+- **Runs your setup** — whatever you put in `HARNESS_SETUP` (e.g. `pnpm db:setup`).
+
+`new` prints the worktree path on **stdout** (everything else is stderr), so you can capture it: `wt="$(worktree-harness new feat)"`.
+
+## Landing back is fast-forward-only, gated, and never pushed
+
+`merge`, run from inside the worktree, makes the one boring, safe move:
+
+```mermaid
+flowchart TD
+    M[worktree-harness merge — from inside the worktree] --> A{working tree clean?}
+    A -- no --> A1[stop: commit explicit paths first]
+    A -- yes --> B{already landed?}
+    B -- yes --> B1[done — nothing to do]
+    B -- no --> C[rebase the branch onto the base]
+    C -- conflict git cannot auto-resolve --> C1[stop: how to resolve / abort — base untouched]
+    C -- clean --> D{is default branch an ancestor of the rebased branch?}
+    D -- no --> D1[REFUSE — base diverged; the move would not be a fast-forward]
+    D -- yes --> E[run HARNESS_MERGE_GATE on the rebased tree]
+    E -- fails --> E1[stop — base NOT updated]
+    E -- passes --> F[fast-forward the LOCAL default branch to the branch tip]
+    F --> G[done — NEVER pushes]
+```
+
+Three properties are deliberate:
+
+1. **Fast-forward only.** The branch is rebased onto the base, then an ancestry check confirms the move is a true fast-forward before anything is touched. A diverged base is refused loudly, not forced.
+2. **Gated.** A clean *textual* rebase can still be *semantically* broken, so `HARNESS_MERGE_GATE` (your typecheck/test command) runs on the rebased tree *before* the default branch moves — catching breakage a plain merge would hide.
+3. **Never pushes.** Landing is local; pushing stays a separate, explicit `git push` you run when you mean it. (This is a direct answer to a real footgun in a popular alternative, whose "checkout" auto-pushes to the remote.)
+
+Concurrent merge-backs serialize naturally — each is a fast-forward of one ref, ordered by git's per-ref lock in microseconds; a non-fast-forward is rejected, so the loser of a race just re-rebases and retries. Cleanup is conservative by construction: `gc` removes a worktree only if it's merged **and** clean **and** idle **and** not open by a live process — anything else is kept with a printed reason, and **your branches are always preserved.**
+
+## The only thing it adds to your machine is git and bash
+
+- **Zero runtime dependencies.** No daemon, no Go or Rust binary, no YAML parser. `.harnessrc` is sourced as bash — arrays and comments for free — and the trust model is identical to a `Makefile`: run it only in repos you trust.
+- **Agent-agnostic.** Claude Code, Aider, Codex, anything else — set `HARNESS_AGENT` or pass `launch -- <cmd>`, and list several in `WORKTREE_HARNESS_AGENTS` for the shell integration.
+- **First-class for the local-canonical workflow.** When `origin` is a stale fork and your *local* default branch is the truth, set `HARNESS_BASE_POLICY=local`: the tool branches and rebases off your local tip and never touches the network — exactly the case native `claude -w` silently mishandles ([#27947](https://github.com/anthropics/claude-code/issues/27947)).
+
+See [`docs/DESIGN.md`](docs/DESIGN.md) for the full argument and [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for what it trusts and protects.
 
 ## Install
 
@@ -80,10 +155,7 @@ Or from a checkout:
 git clone https://github.com/renchris/worktree-harness && ./worktree-harness/install.sh
 ```
 
-It installs to `~/.local` by default (override with `WORKTREE_HARNESS_PREFIX`):
-files go under `~/.local/share/worktree-harness`, and the `worktree-harness`
-command is symlinked into `~/.local/bin`. No sudo, no global state. To uninstall,
-delete those two paths.
+It installs to `~/.local` by default (override with `WORKTREE_HARNESS_PREFIX`): files go under `~/.local/share/worktree-harness`, and the `worktree-harness` command is symlinked into `~/.local/bin`. No sudo, no global state. To uninstall, delete those two paths.
 
 **Requirements:** `git` and `bash` ≥ 3.2 (i.e. stock macOS `/bin/bash`) — that's it.
 
@@ -125,7 +197,7 @@ the `curl` installer they ship under
 `~/.local/share/worktree-harness/share/completions/` — source the one for your
 shell (e.g. add `source .../worktree-harness.bash` to `~/.bashrc`).
 
-## Configuration — `.harnessrc`
+## Configure once in `.harnessrc`
 
 A `.harnessrc` in your repo root, committed so every worktree inherits it. It's
 **sourced as bash** (zero parsing dependencies; arrays and comments for free).
