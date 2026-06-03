@@ -1,0 +1,13 @@
+# shellcheck configuration for worktree-harness.
+#
+# We target bash, and intentionally restrict ourselves to constructs available
+# in bash 3.2 (the stock macOS /bin/bash) so the tool runs unchanged on macOS
+# and Linux. shellcheck has no "bash 3.2" dialect flag, so that floor is
+# enforced separately by test/bashism.bats (a grep guard for 4.0+ constructs:
+# declare -A, mapfile/readarray, [[ -v ]], ${var^^}).
+shell=bash
+
+# Resolve `source lib/<file>.sh` relative to the sourcing script so cross-file
+# checks work without absolute paths.
+external-sources=true
+source-path=SCRIPTDIR

@@ -1,0 +1,10 @@
+# Shell scripts must be byte-identical on macOS and Linux — force LF so a
+# Windows checkout (or a CRLF-normalizing editor) can never inject \r, which
+# would break the shebang line and `read`-based parsing.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.bats  text eol=lf
+*.fish  text eol=lf
+
+# The dispatcher and shell-integration snippets have no extension.
+bin/worktree-harness text eol=lf

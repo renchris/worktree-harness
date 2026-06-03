@@ -1,0 +1,21 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+*.swp
+*~
+.idea/
+.vscode/
+
+# Test + local artifacts
+test/tmp/
+coverage/
+*.tmp
+*.log
+
+# Scratch space used for manual end-to-end testing
+/.scratch/
+
+# Vendored test runner (pulled on demand; never committed)
+/.bats/
