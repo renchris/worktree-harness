@@ -1,0 +1,13 @@
+# Solo / diverged-fork workflow: your LOCAL default branch is the source of
+# truth, origin is stale and you push rarely. Branch + rebase off LOCAL main;
+# never fetch. (This is the case native `claude -w` silently mishandles.)
+
+HARNESS_BASE_POLICY="local"                # branch off local <default>, no network
+HARNESS_COPY=( ".env.local" )
+HARNESS_PACKAGE_MANAGER="auto"
+HARNESS_SETUP=( "pnpm db:setup" )          # per-worktree local DB — copied, never symlinked
+HARNESS_PORTS=( "PORT=3000" "INSPECT_PORT=9229" )
+HARNESS_MERGE_GATE="pnpm typecheck"
+HARNESS_AGENT="claude"
+# HARNESS_GC_KEEP=( "playground" )          # never reap a long-lived scratch worktree
+# HARNESS_GC_IDLE_MIN="30"                  # keep worktrees touched within N minutes

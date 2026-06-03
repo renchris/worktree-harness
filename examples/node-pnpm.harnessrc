@@ -1,0 +1,9 @@
+# Node + pnpm app, team repo (origin/main is canonical).
+
+HARNESS_BASE_POLICY="origin"               # fetch + branch off origin/main
+HARNESS_COPY=( ".env" ".env.local" )       # gitignored runtime config
+HARNESS_PACKAGE_MANAGER="auto"             # pnpm-lock.yaml → pnpm install --frozen-lockfile
+HARNESS_PORTS=( "PORT=3000" "INSPECT_PORT=9229" )   # → .harness.env, offset per worktree
+HARNESS_MERGE_GATE="pnpm typecheck"        # must pass before merge fast-forwards
+HARNESS_AGENT="claude"
+# HARNESS_SETUP=( "pnpm db:setup" )         # uncomment if a per-worktree DB is needed

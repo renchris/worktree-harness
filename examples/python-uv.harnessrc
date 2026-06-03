@@ -1,0 +1,9 @@
+# Python service managed by uv, team repo (origin/main is canonical).
+
+HARNESS_BASE_POLICY="origin"
+HARNESS_COPY=( ".env" )
+HARNESS_PACKAGE_MANAGER="auto"             # uv.lock → uv sync --frozen
+HARNESS_PORTS=( "PORT=8000" )              # → .harness.env
+HARNESS_MERGE_GATE="uv run ruff check . && uv run mypy ."
+HARNESS_AGENT="claude"
+# HARNESS_SETUP=( "uv run alembic upgrade head" )   # per-worktree DB migrations, if any
