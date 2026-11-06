@@ -36,6 +36,13 @@ RC
 # An empty scratch dir for pure-function tests (no git needed).
 make_dir() { D="$BATS_TEST_TMPDIR/scratch"; mkdir -p "$D"; cd "$D" || return 1; }
 
+# A directory that git can never resolve to an enclosing repo. Leaves cwd in it.
+make_norepo() {
+  mkdir "$BATS_TEST_TMPDIR/norepo"
+  cd "$BATS_TEST_TMPDIR/norepo" || return 1
+  export GIT_CEILING_DIRECTORIES="$BATS_TEST_TMPDIR"
+}
+
 # Commit a file ($2, default feat.txt) inside a worktree ($1).
 commit_in() {
   local wt="$1" f="${2:-feat.txt}"

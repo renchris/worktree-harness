@@ -77,6 +77,8 @@ main() {
     shift
   done
   export WH_DRY_RUN="${WH_DRY_RUN:-0}"
+  wh_init_style
+  wh_install_signal_traps
 
   local cmd="${1:-help}"; shift 2>/dev/null || true
   case "$cmd" in
