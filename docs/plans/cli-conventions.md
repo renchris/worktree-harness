@@ -1335,3 +1335,46 @@ Section 7 records the first round-2 integration and is unchanged except for the 
 | D-R2-17 | CLI `--version` output vs R086 "prints only the version" | (a) Keep `worktree-harness <v>` with an R422 exception: `Formula/worktree-harness.rb:36` and `test/dispatcher.bats:5-7` pin it. (b) Print bare `<v>` in a major-equivalent, changing the formula and the test in the same release |
 | D-R2-18 | C2's `gc --prune --yes` removes an inferred set (R156; R151 allows it) | (a) Treat the set as fully determined by local state, keep the preview printing even with `--yes`, and record an R422 exception for R156. (b) Add `gc --prune [<PATH>]...` and require paths non-interactively, so agents pass what a person approved. That breaks the automation form C2 teaches (~40 LOC, estimated) |
 | D-R2-19 | Rule for F58 (R008's check is about sibling surfaces, and targeted greps found no checklist row on doc accuracy) | (a) File it as a documentation defect with no guideline rule. (b) Keep it under R008. The docs edit is the same either way |
+
+---
+
+## 9. Execution record (session of 2026-11-06)
+
+**Scope ruling (operator's brief for this session).** Wave A and every Wave B item land in full. Wave C lands only rows that need no operator decision. Every other contract-changing item keeps today's behaviour under decision packet `ad226c7513ea` (Keep): documented exit codes stay and are listed in help, `--yes` is an alias, preview-by-default stays, JSON shapes stay. No tag, no release, no `WH_VERSION` bump. The plan's "the lead may apply each recommendation" is replaced by this rule: where an open decision has an option that keeps today's behaviour, that option applies; where every option is additive (nothing exists today), the plan's recommendation applies. All of it is one filed class-B packet.
+
+**Wave C under that ruling.**
+
+| Item | Applied |
+|---|---|
+| C1 exit codes | **Kept.** `WH_EXIT_USAGE` stays 1, unknown command stays 64, merge conflict stays 2, doctor stays the issue count. Added: exit codes listed in root help and the affected command helps (U-B1, U-B5, U-B6); R337 exception in `docs/DESIGN.md` (U-B7) |
+| C2 gc consent | **Kept.** `gc --prune` removes without a prompt. Added: `-y, --yes` accepted on `gc`; it never removes on its own (`gc --yes` previews, `gc --prune --yes` removes), so preview-by-default stays (U-B2). `--non-interactive` isn't added (R437). `wh_require_consent` ships in common.sh with no caller. R146 exception in `docs/DESIGN.md` |
+| C3 unknown evidence | **Kept.** The B3 porcelain shim stays; gc doesn't refuse a guessed default branch. Exception recorded in `docs/DESIGN.md` |
+| C4 piped status | **Lands** (no decision needed) |
+| C5 fetch fails closed | **Kept.** B6's bounded warn-and-continue stays; PM and PORTS stay warnings. Exception recorded |
+| C6 install.sh stdout | **Lands** (no decision needed) |
+| C7 install ownership | **Kept** (D-R2-4 (b)): no refusal, no marker, no `--force`. Receipts land in B10-4 either way. Exception recorded |
+| C8 install.sh exits | **Lands except the `~` rule** (the row's decision covers only that rule); D-R2-12 (b) keeps today's handling of a quoted `~` |
+
+**Open decisions as applied.**
+
+| ID | Applied | Why |
+|---|---|---|
+| D-R2-1 | (b): `--cwd` and `-v` are added and canonical; `-C` and `-V` stay silent and unadvertised, no deprecation warning | Keeps today; reason recorded in `docs/DESIGN.md` |
+| D-R2-2 | (b′): `--version` prints a constant pinned to `lib/common.sh` by a test | Additive; today's "ignored, runs a reinstall" is F22 itself |
+| D-R2-3 | (a): `--prefix <DIR>` added, beats the variable | Additive |
+| D-R2-4 | (b) | Keeps today |
+| D-R2-5 | (a): `WH_GUIDANCE_DISABLED` | Additive |
+| D-R2-6 | (b): rich `wh_step` and install.sh progress keep `→`; R182 deviation recorded. Progress copy still moves to participles with `…`/`...` where no kept test substring depends on it | Keeps today |
+| D-R2-7 | (a): empty means the default, documented | Keeps today |
+| D-R2-8 | (a): get-started steps always shown unless guidance is off | Keeps today |
+| D-R2-9 | (a): drift tests, no generation | Keeps today |
+| D-R2-10 | Superseded: this brief says land one unit at a time, so B units land on `main` in dependency order rather than through `cli-bp/wh-wave-b`. Recorded conflict: `CONTRIBUTING.md:33-34` asks for docs in the PR that changes behaviour; docs land with U-B7 in the same run | Operator's brief |
+| D-R2-11 | (a): deferred | Keeps today |
+| D-R2-12 | (b): no rejection | Keeps today |
+| D-R2-13 | (b): offers stay in all modes except CI and guidance off, with an R422 exception | Keeps today |
+| D-R2-14 | (a): tracks `main`, `WORKTREE_HARNESS_REF` opt-in | Keeps today |
+| D-R2-15 | (a): `--json` added, `--fields` is an R422 exception | Additive |
+| D-R2-16 | (a): `--porcelain` taught, `--human` accepted and unadvertised | Keeps today |
+| D-R2-17 | (a): `worktree-harness <v>` bytes stay | Keeps today |
+| D-R2-18 | Not reached (C2 kept) | n/a |
+| D-R2-19 | (a): filed as a documentation defect | No behaviour either way |
