@@ -1,24 +1,46 @@
 #!/usr/bin/env bash
 # cmd_new.sh — create a fully-runnable worktree for a parallel session.
 # Generalizes reso's new-worktree.sh. The reusable primitive is
-# wh_create_worktree (echoes the path on stdout); `launch` reuses it.
+# wh_create_worktree (sets WH_WT_PATH); `launch` reuses it.
 
 _wh_new_usage() {
-  cat >&2 <<'EOF'
-worktree-harness new <branch>
+  cat <<'EOF'
+Usage:
+  worktree-harness new <BRANCH> [options]
 
-Create a git worktree for <branch>, branched off the base (origin/<default> or
-local <default>, per HARNESS_BASE_POLICY), then make it runnable: copy the
-gitignored files in HARNESS_COPY, run the install command, assign non-colliding
-ports (written to <worktree>/.harness.env), and run HARNESS_SETUP.
+Create a runnable worktree for <BRANCH>, branched off the base branch.
 
-Refuses to reuse an existing branch or the default branch. Honors --dry-run.
+Global Options:
+  worktree-harness --help
+
+Examples:
+    worktree-harness new <BRANCH>
+    worktree-harness new <BRANCH> --dry-run
+
+Notes:
+  Stdout carries only the worktree path, also with --dry-run, so
+  path=$(worktree-harness new <BRANCH>) captures it.
+
+  After branching, this copies the gitignored files in HARNESS_COPY, runs the
+  install command, writes non-colliding ports to <worktree>/.harness.env and
+  runs HARNESS_SETUP. HARNESS_* names are .harnessrc settings.
+
+  An existing branch or the default branch is refused.
+
+  WH_NO_FETCH=1 uses the last-known remote ref instead of fetching. Empty or
+  unset means fetch.
+
+  To create a worktree and start your agent in it in one step, use
+  worktree-harness launch.
 EOF
 }
 
-# wh_create_worktree <branch> — create + provision a worktree. Echoes the
-# resulting path on STDOUT; all progress goes to STDERR so the path is cleanly
-# capturable by callers (e.g. `launch`).
+# wh_create_worktree <branch> — create + provision a worktree and set WH_WT_PATH.
+# Run it as a statement, never inside $(...): errexit is off in a command
+# substitution and the root signal trap doesn't reach it. Stdout stays clean, so
+# progress and the output of git, install and setup all go to STDERR.
+# WH_PARTIAL_* are read by the root signal trap in common.sh.
+# shellcheck disable=SC2034
 wh_create_worktree() {
   local branch="$1" def safe path base
   def="$(wh_default_branch)"
@@ -33,40 +55,82 @@ wh_create_worktree() {
     && wh_die "branch '$branch' already exists — pick a new name (or: git branch -d $branch)."
 
   base="$(wh_base_ref)"            # may fetch (stderr); echoes the ref on stdout
-  mkdir -p "$(dirname "$path")"
-  wh_step "git worktree add $path -b $branch $base"
-  if [ "${WH_DRY_RUN:-0}" = "1" ]; then printf '%s\n' "$path"; return 0; fi
-  # git's chatter goes to stderr so this function's stdout is ONLY the path
-  # (callers like `launch` capture it).
-  git worktree add "$path" -b "$branch" "$base" >&2 || wh_die "git worktree add failed"
-  wh_git_exclude ".harness.env"    # keep our generated env file out of merge/gc gates
+  WH_WT_PATH="$path"
+  if [ "${WH_DRY_RUN:-0}" = "1" ]; then
+    wh_step "would: git worktree add $path -b $branch $base"
+    return 0
+  fi
+  # Braces matter: in a non-UTF-8 locale bash reads the ellipsis as part of the name.
+  wh_step "Creating worktree $path on branch $branch from ${base}…"
+  mkdir -p "$(dirname "$path")" \
+    || wh_die "Couldn't create the directory for worktree $path.${WH_FAIL_HINT:+ $WH_FAIL_HINT}"
+  git worktree add "$path" -b "$branch" "$base" >&2 \
+    || wh_die "Couldn't create worktree $path for branch '$branch' (git's message is above).${WH_FAIL_HINT:+ $WH_FAIL_HINT}"
+  WH_PARTIAL_PATH="$path"
+  WH_PARTIAL_BRANCH="$branch"
 
-  wh_copy_files "$path"
-  wh_run_install "$path"
-  wh_assign_ports "$path"
-  wh_run_setup "$path"
-  printf '%s\n' "$path"
+  # The exclude keeps our generated env file out of merge/gc gates. errexit is off
+  # throughout this list, so every step reports its own failure and returns 1.
+  {
+    wh_git_exclude ".harness.env" \
+      && wh_copy_files "$path" \
+      && wh_run_install "$path" \
+      && wh_assign_ports "$path" \
+      && wh_run_setup "$path"
+  } || _wh_provision_failed "$path" "$branch"
+  WH_PARTIAL_PATH=""
+  WH_PARTIAL_BRANCH=""
+}
+
+# _wh_provision_failed <path> <branch> — the one error for a failed provisioning
+# step: what was left behind and how to remove it. Exits 1.
+_wh_provision_failed() {
+  local quoted
+  wh_err "Failed to provision worktree $1 (branch $2). The worktree and branch were left in place."
+  wh_info "To remove them:"
+  printf -v quoted '%q' "$1"
+  wh_info "    git worktree remove --force $quoted"
+  printf -v quoted '%q' "$2"
+  wh_info "    git branch -D $quoted"
+  if [ -n "${WH_FAIL_HINT:-}" ]; then wh_info "$WH_FAIL_HINT"; fi
+  exit 1
 }
 
 # Copy gitignored runtime files (HARNESS_COPY) from the main checkout. Copy, not
 # symlink — divergence between worktrees is intentional, and a symlinked local
-# DB invites WAL corruption. Secrets get tightened to 0600.
+# DB invites WAL corruption. Secrets are never readable by others, not even while
+# they're being copied. Tries every file, then returns 1 if any failed.
 wh_copy_files() {
-  local path="$1" root f n=0
+  local path="$1" root f n=0 failed=0
   [ "${#HARNESS_COPY[@]}" -eq 0 ] && return 0
   root="$(wh_repo_root)"
   for f in "${HARNESS_COPY[@]}"; do
-    if [ -e "$root/$f" ]; then
-      mkdir -p "$(dirname "$path/$f")"
-      cp -R "$root/$f" "$path/$f"
-      case "$f" in .env|.env.*|*.env|*.env.*) chmod 0600 "$path/$f" 2>/dev/null || true ;; esac
+    if [ ! -e "$root/$f" ]; then
+      wh_warn "copy: '$f' not found in repo root — skipped"
+      continue
+    fi
+    if _wh_copy_one "$f" "$root/$f" "$path/$f"; then
       n=$((n + 1))
     else
-      wh_warn "copy: '$f' not found in repo root — skipped"
+      wh_info "copy failed: $f"
+      failed=$((failed + 1))
     fi
   done
-  [ "$n" -gt 0 ] && wh_ok "copied $n gitignored file(s)"
-  return 0
+  if [ "$n" -gt 0 ]; then wh_ok "copied $(wh_plural "$n" file files)"; fi
+  [ "$failed" -eq 0 ]
+}
+
+# _wh_copy_one <name> <src> <dst> — <name> decides whether this is a secret.
+_wh_copy_one() {
+  mkdir -p "$(dirname "$3")" || return 1
+  case "$1" in
+    .env|.env.*|*.env|*.env.*)
+      ( umask 077; cp -R "$2" "$3" ) || return 1
+      # On a directory, 0600 would remove the x bit that lets anyone enter it.
+      if [ -f "$3" ]; then chmod 0600 "$3" || return 1; fi ;;
+    *)
+      cp -R "$2" "$3" || return 1 ;;
+  esac
 }
 
 # Resolve + run the install command (HARNESS_INSTALL / detected PM) in the
@@ -76,15 +140,59 @@ wh_run_install() {
   root="$(wh_repo_root)"
   cmd="$(wh_resolve_install "$root")"
   [ -z "$cmd" ] && { wh_info "  (no install step)"; return 0; }
-  wh_step "install: $cmd"
+  wh_step "Installing dependencies: ${cmd}…"
   [ "${WH_DRY_RUN:-0}" = "1" ] && return 0
-  ( cd "$path" && export CI="${CI:-true}" && eval "$cmd" ) >&2 || wh_die "install failed: $cmd"
+  if ! ( cd "$path" && export CI="${CI:-true}" && eval "$cmd" ) >&2; then
+    wh_info "install failed: $cmd"
+    return 1
+  fi
 }
 
-# Offset = number of OTHER worktrees, so concurrent worktrees get distinct ports.
+# wh_worktree_offset <new-path> — the smallest offset >= 1 that no other linked
+# worktree holds, so a removed worktree's ports are reused and live ones never are.
 wh_worktree_offset() {
-  local n; n="$(git worktree list --porcelain | grep -c '^worktree ' || true)"
-  if [ "${n:-0}" -gt 0 ]; then echo $(( n - 1 )); else echo 0; fi
+  local new_path list line wt off used="" first=1 k=1
+  new_path="$(cd "$1" && pwd -P)" || return 1   # git lists resolved paths
+  list="$(git worktree list --porcelain)" || return 1
+  while IFS= read -r line; do
+    case "$line" in "worktree "*) ;; *) continue ;; esac
+    wt="${line#worktree }"
+    if [ "$first" = "1" ]; then first=0; continue; fi   # the main checkout is listed first
+    if [ "$wt" = "$new_path" ]; then continue; fi
+    off="$(_wh_env_offset "$wt/.harness.env")"
+    if [ -n "$off" ]; then used="$used $off"; fi
+  done <<< "$list"
+  while :; do
+    case " $used " in
+      *" $k "*) k=$((k + 1)) ;;
+      *) break ;;
+    esac
+  done
+  printf '%s\n' "$k"
+}
+
+# _wh_env_offset <env-file> — the offset a .harness.env holds, if any. A file from
+# before the "# harness-offset=" marker gives its first export minus that name's
+# base in HARNESS_PORTS.
+_wh_env_offset() {
+  local line name value spec
+  [ -r "$1" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "# harness-offset="*) printf '%s\n' "${line#"# harness-offset="}"; return 0 ;;
+      "export "*=*)
+        line="${line#export }"; name="${line%%=*}"; value="${line#*=}"
+        case "$value" in ''|*[!0-9]*) return 0 ;; esac
+        for spec in ${HARNESS_PORTS[@]+"${HARNESS_PORTS[@]}"}; do
+          if [ "${spec%%=*}" = "$name" ]; then
+            case "${spec#*=}" in ''|*[!0-9]*) return 0 ;; esac
+            printf '%s\n' "$(( 10#$value - 10#${spec#*=} ))"
+            return 0
+          fi
+        done
+        return 0 ;;
+    esac
+  done < "$1"
 }
 
 # Ensure a pattern is git-ignored locally via info/exclude (never committed), so
@@ -105,16 +213,22 @@ wh_git_exclude() {
 # Write <worktree>/.harness.env with each HARNESS_PORTS entry offset, so the
 # user (and HARNESS_SETUP) can `source .harness.env` before a dev server.
 wh_assign_ports() {
-  local path="$1" offset envf spec name base
+  local path="$1" offset envf spec name base content mode newline=$'\n'
   [ "${#HARNESS_PORTS[@]}" -eq 0 ] && return 0
-  offset="$(wh_worktree_offset)"
+  offset="$(wh_worktree_offset "$path")" || { wh_info "Couldn't work out a port offset."; return 1; }
   envf="$path/.harness.env"
-  : > "$envf"
+  content="# harness-offset=$offset"
   for spec in "${HARNESS_PORTS[@]}"; do
     name="${spec%%=*}"; base="${spec#*=}"
     case "$base" in ''|*[!0-9]*) wh_warn "ports: '$spec' base not numeric — skipped"; continue ;; esac
-    printf 'export %s=%s\n' "$name" "$(( base + offset ))" >> "$envf"
+    content="$content${newline}export $name=$(( 10#$base + offset ))"
   done
+  # Ports aren't secrets: the file keeps a plain file's mode, 0666 less the umask.
+  mode="$(printf '%04o' "$(( 0666 & ~$(umask) ))")"
+  if ! wh_atomic_write "$envf" "$mode" <<< "$content"; then
+    wh_info "Couldn't write $envf."
+    return 1
+  fi
   wh_ok "ports offset by $offset → $envf (source it before your dev server)"
 }
 
@@ -123,42 +237,48 @@ wh_run_setup() {
   local path="$1" cmd
   [ "${#HARNESS_SETUP[@]}" -eq 0 ] && return 0
   for cmd in "${HARNESS_SETUP[@]}"; do
-    wh_step "setup: $cmd"
+    wh_step "Running setup: ${cmd}…"
     [ "${WH_DRY_RUN:-0}" = "1" ] && continue
     # shellcheck source=/dev/null
-    ( cd "$path" && { [ -f .harness.env ] && . ./.harness.env || :; } && eval "$cmd" ) >&2 \
-      || wh_die "setup step failed: $cmd"
+    if ! ( cd "$path" && { [ -f .harness.env ] && . ./.harness.env || :; } && eval "$cmd" ) >&2; then
+      wh_info "setup step failed: $cmd"
+      return 1
+    fi
   done
   wh_ok "setup complete"
 }
 
+# Optional tips: WH_GUIDANCE_DISABLED hides them. The stdout path always prints.
 _wh_new_next_steps() {
-  local path="$1" def; def="$(wh_default_branch)"
+  local quoted def
+  wh_guidance_enabled || return 0
+  def="$(wh_default_branch)"
+  printf -v quoted '%q' "$1"
   {
-    printf '\nNext:\n'
-    printf '  cd %s\n' "$path"
-    printf '  %s                  # launch your agent here\n' "$HARNESS_AGENT"
-    printf '  worktree-harness merge       # rebase onto %s, gate, fast-forward %s (never pushes)\n' "$def" "$def"
-    printf '  worktree-harness gc --prune  # reap merged + idle worktrees (branch kept)\n'
+    printf '\nNext steps:\n'
+    printf '  Go to the worktree:\n'
+    printf '    cd %s\n' "$quoted"
+    printf '  Start your agent:\n'
+    printf '    %s\n' "$HARNESS_AGENT"
+    printf '  Rebase, run the gate and fast-forward %s (never pushes):\n' "$def"
+    printf '    worktree-harness merge\n'
+    printf '  Remove merged, idle worktrees (branches are kept):\n'
+    printf '    worktree-harness gc --prune\n'
   } >&2
 }
 
 wh_cmd_new() {
-  local branch=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      -h|--help) _wh_new_usage; return 0 ;;
-      --dry-run) WH_DRY_RUN=1 ;;
-      --) shift; break ;;
-      -*) wh_die "new: unknown flag '$1'" ;;
-      *)  if [ -z "$branch" ]; then branch="$1"; else wh_die "new: unexpected argument '$1'"; fi ;;
-    esac
-    shift
-  done
-  [ -n "$branch" ] || { _wh_new_usage; wh_die "new: a branch name is required"; }
+  wh_parse_opts new 1 "" -- "$@"
+  local branch="${WH_ARGS[0]:-}"
+  [ -n "$branch" ] || wh_usage_die new "Missing branch name."
   wh_load_config
-  local path; path="$(wh_create_worktree "$branch")"
-  printf '%s\n' "$path"                       # stdout: the path (capturable)
-  wh_ok "worktree ready: $path  (branch: $branch)"
-  _wh_new_next_steps "$path"
+  wh_require_repo new
+  wh_create_worktree "$branch"
+  printf '%s\n' "$WH_WT_PATH"                 # stdout: the path (capturable)
+  if [ "${WH_DRY_RUN:-0}" = "1" ]; then
+    wh_info "dry-run: would create worktree $WH_WT_PATH (branch: $branch). Nothing changed."
+    return 0
+  fi
+  wh_ok "worktree ready: $WH_WT_PATH  (branch: $branch)"
+  _wh_new_next_steps "$WH_WT_PATH"
 }
