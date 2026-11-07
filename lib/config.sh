@@ -59,19 +59,44 @@ wh_load_config() {
     _status=$?
     set -e
     cd "$_pwd" 2>/dev/null || true
-    [ "$_status" -eq 0 ] || wh_die ".harnessrc failed to load (exit $_status). Run: worktree-harness doctor"
+    [ "$_status" -eq 0 ] || wh_fail 1 invalid_config ".harnessrc failed to load (exit $_status). Run: worktree-harness doctor"
   fi
   wh_validate_config
 }
 
-wh_validate_config() {
+# _wh_one_line <s> — <s> with newlines as spaces, so a value can't add a line.
+_wh_one_line() { printf '%s' "${1//$'\n'/ }"; }
+
+# wh_config_problems — one line per invalid key; these stop every command that
+# loads the config. Never exits, so doctor can report them all.
+wh_config_problems() {
   case "$HARNESS_BASE_POLICY" in
     origin|local) ;;
-    *) wh_die "HARNESS_BASE_POLICY must be 'origin' or 'local' (got '$HARNESS_BASE_POLICY')" ;;
+    *) printf "HARNESS_BASE_POLICY must be 'origin' or 'local' (got '%s')\n" "$(_wh_one_line "$HARNESS_BASE_POLICY")" ;;
   esac
   case "$HARNESS_GC_IDLE_MIN" in
-    ''|*[!0-9]*) wh_die "HARNESS_GC_IDLE_MIN must be a whole number (got '$HARNESS_GC_IDLE_MIN')" ;;
+    ''|*[!0-9]*) printf "HARNESS_GC_IDLE_MIN must be a whole number (got '%s')\n" "$(_wh_one_line "$HARNESS_GC_IDLE_MIN")" ;;
   esac
+}
+
+# wh_config_warnings — one line per suspect value that doesn't stop a command.
+# Needs pm.sh for the list of package managers.
+wh_config_warnings() {
+  local spec
+  if ! wh_pm_is_known "$HARNESS_PACKAGE_MANAGER"; then
+    printf "HARNESS_PACKAGE_MANAGER '%s' is not a known package manager (known: %s)\n" \
+      "$(_wh_one_line "$HARNESS_PACKAGE_MANAGER")" "$WH_PM_KNOWN"
+  fi
+  for spec in ${HARNESS_PORTS[@]+"${HARNESS_PORTS[@]}"}; do
+    if ! [[ "$spec" =~ ^[A-Za-z_][A-Za-z0-9_]*=[0-9]+$ ]]; then
+      printf "HARNESS_PORTS entry '%s' must look like NAME=BASE (for example PORT=3000)\n" "$(_wh_one_line "$spec")"
+    fi
+  done
+}
+
+wh_validate_config() {
+  local p; p="$(wh_config_problems)"
+  [ -z "$p" ] || wh_fail 1 invalid_config "${p%%$'\n'*}"
 }
 
 # Echo the default branch name. Explicit config wins; else origin/HEAD's target;
@@ -87,11 +112,37 @@ wh_default_branch() {
   git rev-parse --abbrev-ref HEAD 2>/dev/null
 }
 
+# _wh_fetch_bounded <remote> <branch> — fetch without prompting, and give up on a
+# stalled connection. Prints only git's stderr. Call it inside $(...), which keeps
+# the exports out of the caller. A user's own ssh setup is left alone.
+_wh_fetch_bounded() {
+  export GIT_TERMINAL_PROMPT=0
+  if [ -z "${GIT_SSH_COMMAND+x}" ] && [ -z "${GIT_SSH+x}" ] \
+    && [ -z "$(git config core.sshCommand 2>/dev/null || true)" ]; then
+    export GIT_SSH_COMMAND="ssh -o ConnectTimeout=10 -o BatchMode=yes"
+  fi
+  { git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 fetch --quiet "$1" "$2" >/dev/null; } 2>&1
+}
+
+# _wh_safe_url_text — stdin to stdout, without credentials in URLs or control bytes.
+_wh_safe_url_text() { wh_sanitize_stream | sed 's#://[^/]*@#://#g'; }
+
+# _wh_fetch_base <branch> — a failed fetch warns and the run continues on the
+# last-known remote ref.
+_wh_fetch_base() {
+  local def="$1" err url first
+  err="$(_wh_fetch_bounded "$HARNESS_REMOTE" "$def")" && return 0
+  url="$(git remote get-url "$HARNESS_REMOTE" 2>/dev/null | _wh_safe_url_text || true)"
+  first="$(printf '%s\n' "${err%%$'\n'*}" | _wh_safe_url_text)"
+  wh_warn "Couldn't fetch $def from $HARNESS_REMOTE ($url): ${first:-git gave no error text}. Using last-known $HARNESS_REMOTE/$def."
+}
+
 # Echo the git ref to branch/rebase from, honoring base policy. For policy
-# "origin" it fetches first (unless WH_NO_FETCH=1) and returns "<remote>/<branch>";
-# for "local" it returns the local branch and never touches the network. Falls
-# back to local if policy=origin but the remote is absent. Progress goes to
-# stderr so the captured stdout is only the ref.
+# "origin" it fetches first (unless WH_NO_FETCH=1 or a dry run, since a fetch moves
+# remote-tracking refs) and returns "<remote>/<branch>"; for "local" it returns the
+# local branch and never touches the network. Falls back to local if policy=origin
+# but the remote is absent. Progress goes to stderr so the captured stdout is only
+# the ref.
 wh_base_ref() {
   local def; def="$(wh_default_branch)"
   if [ "$HARNESS_BASE_POLICY" = "origin" ]; then
@@ -100,9 +151,12 @@ wh_base_ref() {
       printf '%s\n' "$def"; return
     fi
     if [ "${WH_NO_FETCH:-0}" != "1" ]; then
-      wh_step "fetch $HARNESS_REMOTE $def"
-      git fetch --quiet "$HARNESS_REMOTE" "$def" 2>/dev/null \
-        || wh_warn "fetch failed — basing on last-known $HARNESS_REMOTE/$def"
+      if [ "${WH_DRY_RUN:-0}" = "1" ]; then
+        wh_step "would fetch $HARNESS_REMOTE $def (skipped: dry run)"
+      else
+        wh_step "Fetching $HARNESS_REMOTE ${def}…"
+        _wh_fetch_base "$def"
+      fi
     fi
     printf '%s/%s\n' "$HARNESS_REMOTE" "$def"
   else

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+bats_require_minimum_version 1.5.0
 load helper
 
 setup() {
@@ -68,6 +69,23 @@ setup() {
   make_dir
   [ "$(wh_detect_pm "$PWD")" = "none" ]
   [ -z "$(wh_pm_install_cmd none "$PWD")" ]
+}
+
+@test "every known package manager has an install command" {
+  make_dir
+  local pm
+  for pm in $WH_PM_KNOWN; do
+    case "$pm" in auto|none) continue ;; esac
+    [ -n "$(wh_pm_install_cmd "$pm" "$PWD")" ]
+  done
+}
+
+@test "known names match exactly" {
+  wh_pm_is_known pnpm
+  wh_pm_is_known none
+  run -1 wh_pm_is_known "pnpm npm"
+  run -1 wh_pm_is_known ""
+  run -1 wh_pm_is_known pnmp
 }
 
 @test "lockfile precedence: pnpm beats package-lock" {

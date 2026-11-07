@@ -4,6 +4,18 @@
 # files in the repo root ($1). This is one of the tool's differentiators: no
 # competitor auto-derives the frozen-lockfile command from the lockfile.
 
+# The values HARNESS_PACKAGE_MANAGER accepts.
+WH_PM_KNOWN="auto pnpm npm yarn bun pip pipenv poetry uv cargo go none"
+
+# wh_pm_is_known <name> — exact match, so "pnpm npm" or "" isn't known.
+wh_pm_is_known() {
+  local k
+  for k in $WH_PM_KNOWN; do
+    if [ "$k" = "$1" ]; then return 0; fi
+  done
+  return 1
+}
+
 # wh_detect_pm <repo-root> → pnpm|bun|yarn|npm|uv|poetry|pipenv|pip|cargo|go|none
 wh_detect_pm() {
   local r="$1"
@@ -40,7 +52,9 @@ wh_pm_install_cmd() {
     pip)    echo "pip install -r requirements.txt" ;;
     cargo)  echo "cargo fetch" ;;
     go)     echo "go mod download" ;;
-    none|*) echo "" ;;
+    none)   echo "" ;;
+    *)      wh_warn "HARNESS_PACKAGE_MANAGER '$pm' is not a known package manager; skipping install."
+            echo "" ;;
   esac
 }
 
