@@ -49,6 +49,38 @@ commit_in() {
   ( cd "$wt" && printf 'x\n' > "$f" && git add "$f" && git commit -qm "feat: $f" )
 }
 
+# assert_help_examples_parse <cmd> — every example in `<cmd> --help` gets through
+# the parser. Placeholders become real values, and __WH_PARSE_ONLY=1 stops each run
+# before the command does any work. The text is the CLI's own help, so eval is safe.
+assert_help_examples_parse() {
+  local cmd="$1" help_text line example dir in_examples=0 has_section=0 count=0
+  help_text="$("$WH" "$cmd" --help)" || { echo "$cmd --help failed"; return 1; }
+  printf -v dir '%q' "$BATS_TEST_TMPDIR"
+  while IFS= read -r line; do
+    case "$line" in
+      Examples:*) in_examples=1; has_section=1 ;;
+      "    worktree-harness "*)
+        if [ "$in_examples" = "0" ]; then continue; fi
+        example="${line#    worktree-harness }"
+        example="${example//<BRANCH>/r2-example}"
+        example="${example//<DIR>/$dir}"
+        example="${example//<COMMAND>/true}"
+        example="${example//<FIELDS>/branch,path}"
+        if ! ( export __WH_PARSE_ONLY=1; eval "\"\$WH\" $example" ) >/dev/null 2>&1 </dev/null; then
+          printf 'example failed to parse: %s\n' "$line"
+          return 1
+        fi
+        count=$((count + 1)) ;;
+      ""|" "*) ;;
+      *) in_examples=0 ;;
+    esac
+  done <<< "$help_text"
+  if [ "$has_section" = "1" ] && [ "$count" -eq 0 ]; then
+    printf '%s --help has an Examples: section with no examples\n' "$cmd"
+    return 1
+  fi
+}
+
 # Print any bash-4+-only constructs found in REAL (non-comment) code lines of
 # the bash sources. Empty output = clean. (zsh.sh / fish.fish are excluded —
 # they intentionally use shell-specific syntax.)

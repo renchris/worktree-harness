@@ -16,6 +16,21 @@ WH_VERSION="0.2.0"
 WH_EXIT_USAGE=1
 WH_EXIT_MISSING_INPUT=2   # a required confirmation can't be asked for (wh_require_consent)
 
+# --- JSON mode ---------------------------------------------------------------
+# wh_parse_opts sets WH_JSON=1 when the command declares --json and argv has it.
+# Stdout then carries one document and stderr at most one error line.
+WH_JSON=0
+WH_JSON_WARNINGS=""                     # comma-joined warning objects for wh_json_out
+WH_REASONS="invalid_arguments unknown_option unknown_command repository_not_found invalid_config conflict network_error partial_failure confirmation_required canceled internal_error"
+WH_WARNING_REASONS="deprecated general"
+
+# Deprecations. bin sets WH_QUEUE_WARNINGS=1 before its global loop, because the
+# output mode isn't known until the command's parser has run; wh_parse_opts and
+# wh_flush_pending_warnings close the queue. Left at 0, they print at once.
+WH_DEPRECATED_SEEN=""
+WH_QUEUE_WARNINGS=0
+WH_PENDING_WARNINGS=""                  # newline-joined messages
+
 # --- style -------------------------------------------------------------------
 # _wh_color_on <fd> — colour decision for one stream. Precedence: WH_NO_COLOR=1
 # (--no-color) > non-empty NO_COLOR (https://no-color.org) > FORCE_COLOR (set and
@@ -30,7 +45,8 @@ _wh_color_on() {
 # wh_init_style — set the stream facts and colour roles. WH_C_* are for stderr,
 # WH_O_* for stdout. Runs at source time, and again once global flags are known.
 wh_init_style() {
-  WH_TTY_OUT=0; WH_TTY_ERR=0; WH_RICH_ERR=0
+  WH_TTY_IN=0; WH_TTY_OUT=0; WH_TTY_ERR=0; WH_RICH_ERR=0
+  if [ -t 0 ]; then WH_TTY_IN=1; fi
   if [ -t 1 ]; then WH_TTY_OUT=1; fi
   if [ -t 2 ]; then
     WH_TTY_ERR=1
@@ -66,23 +82,163 @@ _wh_line() {
   fi
 }
 
-wh_info() { printf '%s\n' "$*" >&2; }
-wh_step() { _wh_line "$WH_C_BLUE"   '→' ''         "$*"; }
-wh_ok()   { _wh_line "$WH_C_GREEN"  '✓' ''         "$*"; }
-wh_warn() { _wh_line "$WH_C_YELLOW" '!' 'Warning:' "$*"; }
-wh_err()  { _wh_line "$WH_C_RED"    '✗' 'Error:'   "$*"; }
-wh_die()  { wh_err "$*"; exit 1; }
+# _wh_json_quiet — true when progress output must stay off stderr.
+_wh_json_quiet() { [ "$WH_JSON" = "1" ]; }
+
+wh_info() { _wh_json_quiet || printf '%s\n' "$*" >&2; }
+wh_step() { _wh_json_quiet || _wh_line "$WH_C_BLUE"  '→' '' "$*"; }
+wh_ok()   { _wh_json_quiet || _wh_line "$WH_C_GREEN" '✓' '' "$*"; }
+wh_warn() { _wh_warning general "$*"; }
+wh_err()  { _wh_line "$WH_C_RED" '✗' 'Error:' "$*"; }
+wh_die()  { wh_fail 1 "${WH_FAIL_REASON:-internal_error}" "$*"; }
+
+# _wh_warning <reason> <message> — on stderr, or kept for the JSON document.
+_wh_warning() {
+  local reason="$1"
+  case " $WH_WARNING_REASONS " in *" $reason "*) ;; *) reason="general" ;; esac
+  if [ "$WH_JSON" = "1" ]; then
+    WH_JSON_WARNINGS="${WH_JSON_WARNINGS:+$WH_JSON_WARNINGS,}{\"reason\":$(wh_json_str "$reason"),\"message\":$(wh_json_str "$2")}"
+  else
+    _wh_line "$WH_C_YELLOW" '!' 'Warning:' "$2"
+  fi
+}
+
+# wh_deprecated <id> <old> <new> — warn at most once per <id> per run.
+wh_deprecated() {
+  local msg="'$2' is deprecated. Use '$3'." newline=$'\n'
+  case " $WH_DEPRECATED_SEEN " in *" $1 "*) return 0 ;; esac
+  WH_DEPRECATED_SEEN="$WH_DEPRECATED_SEEN $1"
+  if [ "$WH_QUEUE_WARNINGS" = "1" ]; then
+    WH_PENDING_WARNINGS="${WH_PENDING_WARNINGS:+$WH_PENDING_WARNINGS$newline}$msg"
+  else
+    _wh_warning deprecated "$msg"
+  fi
+}
+
+# wh_flush_pending_warnings — the output mode is now known: close the queue and
+# send what it holds to stderr or the JSON document.
+wh_flush_pending_warnings() {
+  local msg pending="$WH_PENDING_WARNINGS"
+  WH_QUEUE_WARNINGS=0; WH_PENDING_WARNINGS=""
+  if [ -z "$pending" ]; then return 0; fi
+  while IFS= read -r msg; do
+    _wh_warning deprecated "$msg"
+  done <<< "$pending"
+}
+
+# _wh_json_next <command> — one "next" entry. argv is the command split on spaces,
+# so pass a command whose values contain none.
+_wh_json_next() {
+  local word argv="" words
+  IFS=' ' read -r -a words <<< "$1"
+  for word in ${words[@]+"${words[@]}"}; do
+    argv="${argv:+$argv,}$(wh_json_str "$word")"
+  done
+  printf '{"command":%s,"argv":[%s]}' "$(wh_json_str "$1")" "$argv"
+}
+
+# wh_fail <exit> <reason> <message> [<next-command>] — the one way to fail. Human
+# text, or in JSON mode exactly one line on stderr. Reasons come from WH_REASONS.
+wh_fail() {
+  local code="$1" reason="$2" msg="$3" next="${4:-}" line
+  wh_flush_pending_warnings
+  case " $WH_REASONS " in *" $reason "*) ;; *) reason="internal_error" ;; esac
+  if [ "$WH_JSON" = "1" ]; then
+    line="{\"status\":\"error\",\"reason\":$(wh_json_str "$reason"),\"message\":$(wh_json_str "$msg")"
+    if [ -n "$next" ]; then line="$line,\"next\":[$(_wh_json_next "$next")]"; fi
+    printf '%s}\n' "$line" >&2
+  else
+    wh_err "$msg"
+    if [ -n "$next" ]; then
+      wh_info ""
+      wh_info "Next:"
+      wh_info "    $next"
+    fi
+  fi
+  exit "$code"
+}
 
 # wh_usage_die <cmd-or-""> <message> [<reason>] — report a usage error, name the
-# help command, exit WH_EXIT_USAGE. <reason> is accepted for callers; nothing
-# reads it yet.
+# help command, exit WH_EXIT_USAGE. <reason> defaults to invalid_arguments.
 wh_usage_die() {
-  local cmd="${1:-}"
+  local cmd="${1:-}" help_cmd
+  help_cmd="worktree-harness ${1:+$cmd }--help"
+  if [ "$WH_JSON" = "1" ]; then
+    wh_fail "$WH_EXIT_USAGE" "${3:-invalid_arguments}" "${2:-}" "$help_cmd"
+  fi
+  wh_flush_pending_warnings
   wh_err "${2:-}"
   wh_info ""
   wh_info "See all options:"
-  wh_info "    worktree-harness ${cmd:+$cmd }--help"
+  wh_info "    $help_cmd"
   exit "$WH_EXIT_USAGE"
+}
+
+# wh_json_out <compact-json-object> — the result document, plus any warnings. As
+# is when piped; indented with 2 spaces on a TTY.
+wh_json_out() {
+  local doc="$1"
+  if [ -n "$WH_JSON_WARNINGS" ]; then
+    if [ "$doc" = "{}" ]; then
+      doc="{\"warnings\":[$WH_JSON_WARNINGS]}"
+    else
+      doc="${doc%?},\"warnings\":[$WH_JSON_WARNINGS]}"
+    fi
+  fi
+  if [ "$WH_TTY_OUT" = "1" ]; then
+    printf '%s\n' "$doc" | _wh_json_pretty
+  else
+    printf '%s\n' "$doc"
+  fi
+}
+
+# _wh_json_pretty — indent compact JSON from stdin; string contents stay untouched.
+_wh_json_pretty() {
+  LC_ALL=C awk '
+    function newline(level, i) { printf "\n"; for (i = 0; i < level; i++) printf "  " }
+    {
+      n = length($0)
+      for (p = 1; p <= n; p++) {
+        c = substr($0, p, 1)
+        if (in_string) {
+          printf "%s", c
+          if (c == "\\") { p++; printf "%s", substr($0, p, 1) }
+          else if (c == "\"") in_string = 0
+        } else if (c == "\"") {
+          in_string = 1; printf "%s", c
+        } else if (c == "{" || c == "[") {
+          after = substr($0, p + 1, 1)
+          if (after == "}" || after == "]") { printf "%s%s", c, after; p++ }
+          else { printf "%s", c; depth++; newline(depth) }
+        } else if (c == "}" || c == "]") {
+          depth--; newline(depth); printf "%s", c
+        } else if (c == ",") {
+          printf "%s", c; newline(depth)
+        } else if (c == ":") {
+          printf ": "
+        } else {
+          printf "%s", c
+        }
+      }
+    }
+    END { printf "\n" }'
+}
+
+# --- guidance ----------------------------------------------------------------
+# _wh_interactive — someone at a terminal can see and answer us.
+_wh_interactive() { [ "$WH_TTY_IN" = "1" ] && [ "$WH_TTY_ERR" = "1" ] && [ -z "${CI+x}" ]; }
+
+# wh_guidance_enabled — optional tips print. Required recovery never checks this.
+wh_guidance_enabled() { [ -z "${WH_GUIDANCE_DISABLED:-}" ]; }
+
+# wh_offer_enabled — tips that invite the next action print.
+wh_offer_enabled() { wh_guidance_enabled && [ "$WH_JSON" = "0" ] && _wh_interactive; }
+
+# wh_print_id <value> — the value on stdout so x=$(…) works; nothing on an
+# interactive TTY, where the receipt already shows it.
+wh_print_id() {
+  if [ "$WH_TTY_OUT" = "1" ] && _wh_interactive; then return 0; fi
+  printf '%s\n' "$1"
 }
 
 # wh_run <cmd...> — echo the command, then run it unless WH_DRY_RUN=1.
@@ -135,33 +291,80 @@ _wh_show_help() {
   exit 0
 }
 
-# _wh_prescan_help <cmd> <max|rest> <arg...> — help wins over any other error, so
-# look for it before parsing. Stops at "--"; in rest mode also at the first
-# positional, because everything from there on belongs to the wrapped command.
+# _wh_show_version — print the version on stdout and exit 0.
+_wh_show_version() {
+  if [ "$WH_JSON" = "1" ]; then
+    wh_json_out "{\"version\":$(wh_json_str "$WH_VERSION")}"
+  else
+    printf 'worktree-harness %s\n' "$WH_VERSION"
+  fi
+  exit 0
+}
+
+# _wh_prescan_help <cmd> <max|rest> <spec> <arg...> — settle the output mode, then
+# help wins over any other error and version over the rest, so look before parsing.
+# Stops at "--"; in rest mode also at the first positional, because everything from
+# there on belongs to the wrapped command.
 _wh_prescan_help() {
-  local cmd="$1" max="$2" a
-  shift 2
+  local cmd="$1" max="$2" spec="$3" a help=0 version=0 json=0
+  shift 3
   for a in "$@"; do
     case "$a" in
-      --)        return 0 ;;
-      -h|--help) _wh_show_help "$cmd" ;;
-      -?*)       ;;
-      *)         if [ "$max" = "rest" ]; then return 0; fi ;;
+      --)                      break ;;
+      -h|--help)               help=1 ;;
+      -v|--version)            version=1 ;;
+      --json|--json=true)      json=1 ;;
+      --no-json|--json=false)  json=0 ;;
+      -?*)                     ;;
+      *)                       if [ "$max" = "rest" ]; then break; fi ;;
     esac
   done
-  return 0
+  if [ "$json" = "1" ] && _wh_opt_classify --json "$spec" && [ "$_WH_OPT_TAKES" = "0" ]; then
+    WH_JSON=1
+  fi
+  if [ "$help" = "1" ]; then
+    if [ "$json" = "1" ] && declare -F _wh_help_json >/dev/null; then
+      WH_JSON=1
+      wh_flush_pending_warnings
+      _wh_help_json "$cmd"
+      exit 0
+    fi
+    wh_flush_pending_warnings
+    _wh_show_help "$cmd"
+  fi
+  if [ "$version" = "1" ]; then
+    if [ "$json" = "1" ]; then WH_JSON=1; fi
+    wh_flush_pending_warnings
+    _wh_show_version
+  fi
+  wh_flush_pending_warnings
 }
 
 # _wh_opt_classify <name> <spec> — find an option. On success sets _WH_OPT_TAKES
-# (1 if it takes a value) and _WH_OPT_VAR (empty for a built-in, which
-# _wh_opt_builtin applies). Add a built-in here and in _wh_opt_builtin.
+# (1 if it takes a value), _WH_OPT_VAR (empty for a built-in, which _wh_opt_builtin
+# applies) and _WH_OPT_NEG (1 if <name> is the negation of a boolean: --no-x for
+# --x, or --x for --no-x). Add a built-in in _wh_opt_lookup and _wh_opt_builtin.
 _wh_opt_classify() {
+  _WH_OPT_NEG=0
+  if _wh_opt_lookup "$1" "$2"; then return 0; fi
+  case "$1" in
+    --no-help|--no-version|--no-no-*) return 1 ;;
+    --no-*) _wh_opt_lookup "--${1#--no-}" "$2" || return 1 ;;
+    --*)    _wh_opt_lookup "--no-${1#--}" "$2" || return 1 ;;
+    *)      return 1 ;;
+  esac
+  if [ "$_WH_OPT_TAKES" = "1" ]; then return 1; fi
+  _WH_OPT_NEG=1
+}
+
+# _wh_opt_lookup <name> <spec> — the exact-name half of _wh_opt_classify.
+_wh_opt_lookup() {
   local IFS=' ' _wh_entry _wh_names
   _WH_OPT_TAKES=0; _WH_OPT_VAR=""
   case "$1" in
     *'|'*) return 1 ;;   # would match across the alternatives of a spec entry
-    -h|--help|--dry-run|--no-color) return 0 ;;
-    -C) _WH_OPT_TAKES=1; return 0 ;;
+    -h|--help|-v|--version|--dry-run|--no-color) return 0 ;;
+    -C|--cwd) _WH_OPT_TAKES=1; return 0 ;;
   esac
   for _wh_entry in $2; do
     _wh_names="${_wh_entry%%=*}"
@@ -177,21 +380,27 @@ _wh_opt_classify() {
   return 1
 }
 
-# _wh_opt_builtin <cmd> <name> <value> — apply a built-in option.
+# _wh_opt_builtin <cmd> <name> <value> — apply a built-in option. A boolean's
+# <value> is 1 or 0 for the spelling in the first pattern of its case.
 _wh_opt_builtin() {
   case "$2" in
-    -h|--help)  _wh_show_help "$1" ;;
-    --dry-run)  WH_DRY_RUN=1; export WH_DRY_RUN ;;
-    --no-color) WH_NO_COLOR=1; export WH_NO_COLOR; wh_init_style ;;
-    -C)
+    -h|--help)    if [ "$3" = "1" ]; then _wh_show_help "$1"; fi ;;
+    -v|--version) if [ "$3" = "1" ]; then _wh_show_version; fi ;;
+    --dry-run|--no-dry-run) WH_DRY_RUN="$3"; export WH_DRY_RUN ;;
+    --no-color|--color)     WH_NO_COLOR="$3"; export WH_NO_COLOR; wh_init_style ;;
+    -C|--cwd)
       if [ -z "$3" ]; then wh_usage_die "$1" "Option $2 needs a value."; fi
       CDPATH='' cd -- "$3" >/dev/null 2>&1 || wh_die "Can't change to directory $3." ;;
   esac
 }
 
 # wh_parse_opts <cmd> <max-positionals|rest> "<spec>" -- "$@"
-#   spec: space-separated "a|b=VAR" (boolean, sets VAR=1) or "a|b=VAR:" (takes a
-#   value: --a v or --a=v), with the dashes in the names: "--all|-a=all --base=base:"
+#   spec: space-separated "a|b=VAR" (boolean) or "a|b=VAR:" (takes a value: --a v or
+#   --a=v), with the dashes in the names: "--all|-a=all --base=base:"
+#   A boolean sets VAR=1; --a=true and --a=false set 1 and 0, --no-a sets 0. An entry
+#   spelled --no-x takes --x as its negation.
+#   Built-ins, in every command: -h|--help, -v|--version, -C|--cwd <DIR>, --dry-run,
+#   --no-color. A declared --json turns on WH_JSON. __WH_PARSE_ONLY=1 exits 0 here.
 #   Result: WH_ARGS holds the positionals; read it as ${WH_ARGS[@]+"${WH_ARGS[@]}"}.
 #   "--" ends options. In rest mode the first positional, or anything after "--",
 #   goes to WH_ARGS verbatim, along with everything after it.
@@ -203,7 +412,7 @@ wh_parse_opts() {
   local _wh_arg _wh_name _wh_value _wh_has_value
   shift 4
   WH_ARGS=()
-  _wh_prescan_help "$_wh_cmd" "$_wh_max" "$@"
+  _wh_prescan_help "$_wh_cmd" "$_wh_max" "$_wh_spec" "$@"
 
   while [ $# -gt 0 ]; do
     _wh_arg="$1"; shift
@@ -237,18 +446,27 @@ wh_parse_opts() {
     esac
 
     if ! _wh_opt_classify "$_wh_name" "$_wh_spec"; then
-      wh_usage_die "$_wh_cmd" "Unknown option $_wh_name for worktree-harness $_wh_cmd."
+      wh_usage_die "$_wh_cmd" "Unknown option $_wh_name for worktree-harness $_wh_cmd." unknown_option
     fi
 
     if [ "$_WH_OPT_TAKES" = "1" ]; then
       if [ "$_wh_has_value" = "0" ]; then
         if [ $# -eq 0 ]; then wh_usage_die "$_wh_cmd" "Option $_wh_name needs a value."; fi
         _wh_value="$1"; shift
+        # In rest mode the first prescan stopped at this value, seen as a positional.
+        if [ "$_wh_max" = "rest" ]; then
+          _wh_prescan_help "$_wh_cmd" "$_wh_max" "$_wh_spec" "$@"
+          _wh_opt_classify "$_wh_name" "$_wh_spec"
+        fi
       fi
-    elif [ "$_wh_has_value" = "1" ]; then
-      wh_usage_die "$_wh_cmd" "Option $_wh_name doesn't take a value."
     else
-      _wh_value=1
+      if [ "$_wh_has_value" = "0" ]; then _wh_value=true; fi
+      case "$_wh_value" in
+        true)  _wh_value=1 ;;
+        false) _wh_value=0 ;;
+        *)     wh_usage_die "$_wh_cmd" "Option $_wh_name takes true or false." ;;
+      esac
+      if [ "$_WH_OPT_NEG" = "1" ]; then _wh_value=$((1 - _wh_value)); fi
     fi
 
     if [ -n "$_WH_OPT_VAR" ]; then
@@ -257,6 +475,7 @@ wh_parse_opts() {
       _wh_opt_builtin "$_wh_cmd" "$_wh_name" "$_wh_value"
     fi
   done
+  if [ "${__WH_PARSE_ONLY:-}" = "1" ]; then exit 0; fi
   return 0
 }
 
@@ -340,6 +559,10 @@ WH_PARTIAL_BRANCH=""
 _wh_on_signal() {
   local quoted
   trap - "$1"
+  if [ "$WH_JSON" = "1" ]; then
+    printf '%s\n' '{"status":"error","reason":"canceled","message":"Canceled.","data":{"remote":"none"}}' >&2
+    exit "$2"
+  fi
   if [ -n "$WH_PARTIAL_PATH" ] && [ -e "$WH_PARTIAL_PATH" ]; then
     wh_info "Stopped. Partial worktree left at $WH_PARTIAL_PATH${WH_PARTIAL_BRANCH:+ (branch $WH_PARTIAL_BRANCH)}. To remove it:"
     printf -v quoted '%q' "$WH_PARTIAL_PATH"
