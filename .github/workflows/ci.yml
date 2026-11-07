@@ -21,6 +21,10 @@ jobs:
           shellcheck --version
       - name: Lint bash sources
         run: shellcheck bin/worktree-harness lib/*.sh share/shell/bash.sh
+      # Its own step: .shellcheckrc sets shell=bash, and -s sh would apply to every
+      # file on the line above.
+      - name: Lint install.sh (POSIX sh)
+        run: shellcheck -s sh install.sh
 
   test:
     name: test (${{ matrix.os }})
@@ -59,3 +63,5 @@ jobs:
         run: |
           WORKTREE_HARNESS_PREFIX="$RUNNER_TEMP/prefix" sh ./install.sh
           "$RUNNER_TEMP/prefix/bin/worktree-harness" --version
+      - name: Check that --help does no work
+        run: WORKTREE_HARNESS_PREFIX="$RUNNER_TEMP/p2" sh ./install.sh --help >/dev/null && test ! -e "$RUNNER_TEMP/p2"

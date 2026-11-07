@@ -19,6 +19,7 @@ dependency-free on purpose — that constraint is the product.
 ```sh
 # shellcheck:  brew install shellcheck   |   apt-get install shellcheck
 shellcheck bin/worktree-harness lib/*.sh share/shell/bash.sh
+shellcheck -s sh install.sh
 
 # bats (vendored on demand — no install needed):
 git clone --depth 1 https://github.com/bats-core/bats-core /tmp/bats
@@ -27,7 +28,7 @@ git clone --depth 1 https://github.com/bats-core/bats-core /tmp/bats
 
 ## Before opening a PR
 
-- [ ] `shellcheck` is clean on the bash sources
+- [ ] `shellcheck` is clean on the bash sources and, with `-s sh`, on `install.sh`
 - [ ] `bats test/` is green, with a test covering your change
 - [ ] bash 3.2-safe (the `bashism.bats` guard passes)
 - [ ] Docs updated (README / `docs/` / the `init` template) if behavior or

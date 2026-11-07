@@ -4,7 +4,7 @@
 Briefly: what this changes and the problem it solves.
 
 **Checklist**
-- [ ] `shellcheck bin/worktree-harness lib/*.sh share/shell/bash.sh` is clean
+- [ ] `shellcheck bin/worktree-harness lib/*.sh share/shell/bash.sh` and `shellcheck -s sh install.sh` are clean
 - [ ] `bats test/` passes (added/updated a test for the change)
 - [ ] No new runtime dependency (git + bash only)
 - [ ] bash 3.2-safe (no `declare -A`, `mapfile`/`readarray`, `[[ -v ]]`, `${var^^}`)
