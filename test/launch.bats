@@ -69,7 +69,8 @@ load helper
   make_repo
   "$WH" new feat
   cd "$WT_HOME/app/feat"
-  run --separate-stderr "$WH" launch printf '%s|' --help --dry-run
+  # sh's builtin, not an external printf: coreutils versions differ on --help.
+  run --separate-stderr "$WH" launch sh -c 'printf "%s|" "$@"' sh --help --dry-run
   [ "$status" -eq 0 ]
   [ "$output" = '--help|--dry-run|' ]
 }
