@@ -2,8 +2,9 @@
 # cmd_status.sh — list worktrees with branch, ahead/behind vs the default
 # branch, dirty flag, and the ports assigned in each worktree's .harness.env.
 #
-# Zero-dependency: pure git + awk (no jq). The result is the command's output,
-# so it goes to STDOUT (pipeable); only warnings go to stderr. --porcelain emits
+# Zero-dependency: pure git + awk (no jq). The rows go to STDOUT: an aligned
+# table on a terminal or with --human, tab-separated with a header when piped.
+# Warnings and the summary line go to stderr. --porcelain emits headerless
 # tab-separated rows for scripts/CI; --json emits one document.
 
 _WH_STATUS_FIELDS="kind branch dirty ahead behind ports path"
@@ -36,6 +37,9 @@ Notes:
 
   --porcelain columns, separated by tabs: kind, branch, +ahead/-behind, ports,
   path.
+
+  Piped output is tab-separated with a header row, and the summary line goes
+  to stderr. Scripts should use --porcelain or --json.
 
   Ports come from <worktree>/.harness.env.
 EOF
@@ -132,7 +136,11 @@ wh_cmd_status() {
   # shellcheck disable=SC2034
   WH_FAIL_REASON=""
 
-  local mode=human
+  # table: aligned, for a terminal or --human. tsv: tab-separated with a header,
+  # when stdout isn't a terminal. Both are the human modes: they warn, and their
+  # summary line goes to stderr.
+  local mode=tsv
+  if [ "${WH_TTY_OUT:-0}" = "1" ] || [ "$human" = "1" ]; then mode=table; fi
   if [ "$porcelain" = "1" ]; then mode=porcelain; fi
   if [ "$json" = "1" ]; then mode=json; fi
 
@@ -143,10 +151,13 @@ wh_cmd_status() {
     || wh_fail 128 internal_error "Can't find the default branch. Make a first commit or set HARNESS_DEFAULT_BRANCH in .harnessrc."
   wts="$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10)}')"
 
-  if [ "$mode" = "human" ]; then
-    printf '%s%-24s %-11s %-15s %s%s\n' \
-      "$WH_O_DIM" "BRANCH" "AHEAD/BEH" "PORTS" "PATH" "$WH_O_RESET"
-  fi
+  case "$mode" in
+    table)
+      printf '%s%-24s %-11s %-15s %s%s\n' \
+        "$WH_O_DIM" "BRANCH" "AHEAD/BEH" "PORTS" "PATH" "$WH_O_RESET" ;;
+    tsv)
+      printf 'KIND\tBRANCH\tDIRTY\tAHEAD\tBEHIND\tPORTS\tPATH\n' ;;
+  esac
 
   while IFS= read -r wt; do
     [ -z "$wt" ] && continue
@@ -159,7 +170,7 @@ wh_cmd_status() {
     else
       dirty_json=null
       # Porcelain leaves the column empty. kept: decision packet ad226c7513ea
-      if [ "$mode" = "human" ]; then
+      if [ "$mode" = "table" ] || [ "$mode" = "tsv" ]; then
         dirty="?"
         wh_warn "can't check $wt for uncommitted changes"
       fi
@@ -175,7 +186,7 @@ wh_cmd_status() {
       if [ "$b" != "?" ]; then behind="$b"; fi
       if [ "$a" = "?" ] || [ "$b" = "?" ]; then
         case "$mode" in
-          human)
+          table|tsv)
             if git -C "$main" show-ref --verify --quiet "refs/heads/$def"; then
               wh_warn "can't compare $br with $def"
             else
@@ -200,11 +211,23 @@ wh_cmd_status() {
           ports="$(awk -F= '/^export /{sub(/^export /,""); printf "%s%s", sep, $2; sep=","}' "$wt/.harness.env" 2>/dev/null || true)"
           [ -z "$ports" ] && ports="-"
         fi
-        if [ "$mode" = "porcelain" ]; then
-          printf '%s\t%s\t%s\t%s\t%s\n' "$kind" "$br$dirty" "$ab" "$ports" "$wt"
-        else
-          printf '%-24s %-11s %-15s %s\n' "$br$dirty" "$ab" "$ports" "$wt"
-        fi ;;
+        case "$mode" in
+          porcelain)
+            printf '%s\t%s\t%s\t%s\t%s\n' "$kind" "$br$dirty" "$ab" "$ports" "$wt" ;;
+          tsv)
+            # DIRTY is yes|no|?; AHEAD and BEHIND are a count, - or ?.
+            case "$dirty_json" in
+              true) dirty=yes ;; false) dirty=no ;; *) dirty="?" ;;
+            esac
+            a="$ahead"; b="$behind"
+            if [ "$a" = "null" ]; then a="?"; fi
+            if [ "$b" = "null" ]; then b="?"; fi
+            if [ "$ab" = "-" ]; then a="-"; b="-"; fi
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$kind" "$br" "$dirty" "$a" "$b" "$ports" "$wt" ;;
+          *)
+            printf '%-24s %-11s %-15s %s\n' "$br$dirty" "$ab" "$ports" "$wt" ;;
+        esac ;;
     esac
     count=$((count + 1))
   done <<EOF
@@ -214,8 +237,9 @@ EOF
   case "$mode" in
     json)
       wh_json_out "{\"worktrees\":[$items],\"pagination\":{\"next\":null}}" ;;
-    human)
+    table|tsv)
+      # The summary is commentary, not data, so it stays out of stdout.
       printf '%s(%s · base: %s · '\''*'\'' = uncommitted)%s\n' \
-        "$WH_O_DIM" "$(wh_plural "$count" worktree worktrees)" "$def" "$WH_O_RESET" ;;
+        "$WH_C_DIM" "$(wh_plural "$count" worktree worktrees)" "$def" "$WH_C_RESET" >&2 ;;
   esac
 }

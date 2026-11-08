@@ -96,12 +96,67 @@ break_default_branch() {
 
 @test "footer uses a correct plural" {
   make_repo
-  run "$WH" status
+  run --separate-stderr "$WH" status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"(1 worktree "* ]]
+  [[ "$stderr" == *"(1 worktree "* ]]
   "$WH" new feat
-  run "$WH" status
-  [[ "$output" == *"(2 worktrees "* ]]
+  run --separate-stderr "$WH" status
+  [[ "$stderr" == *"(2 worktrees "* ]]
+}
+
+@test "piped status is TSV with a header" {
+  make_repo
+  "$WH" new feat
+  commit_in "$WT_HOME/app/feat"
+  run --separate-stderr "$WH" status
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | sed -n 1p)" = "$(printf 'KIND\tBRANCH\tDIRTY\tAHEAD\tBEHIND\tPORTS\tPATH')" ]
+  [ "$(printf '%s\n' "$output" | sed -n 2p)" = "$(printf 'main\tmain\tno\t-\t-\t-\t%s' "$(real_path "$APP")")" ]
+  [ "$(printf '%s\n' "$output" | sed -n 3p)" = "$(printf 'linked\tfeat\tno\t1\t0\t3001\t%s' "$(real_path "$WT_HOME/app/feat")")" ]
+  [ -z "$(printf '%s\n' "$output" | grep '  ')" ]
+  [[ "$output" != *$'\033'* ]] || false
+  [[ "$stderr" == *"(2 worktrees"* ]]
+}
+
+@test "the footer is on stderr only" {
+  make_repo
+  run --separate-stderr "$WH" status
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"(1 worktree"* ]] || false
+  [[ "$stderr" == *"(1 worktree"* ]] || false
+  run --separate-stderr "$WH" status --human
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"(1 worktree"* ]] || false
+  [[ "$stderr" == *"(1 worktree"* ]]
+}
+
+@test "--human forces the aligned table when piped" {
+  make_repo
+  run --separate-stderr "$WH" status --human
+  [ "$status" -eq 0 ]
+  [[ "$(printf '%s\n' "$output" | sed -n 1p)" == "BRANCH  "*"AHEAD/BEH  "*"PORTS  "*"PATH" ]] || false
+  [[ "$output" != *$'\t'* ]] || false
+  [[ "$output" != *"KIND"* ]]
+}
+
+@test "on a terminal status is the aligned table, and piped inside it is TSV" {
+  command -v script >/dev/null 2>&1 || skip "script isn't installed, so no pty is available"
+  make_repo
+  local dir="$BATS_TEST_TMPDIR"
+  cat > "$dir/tty.sh" <<SCRIPT
+unset FORCE_COLOR NO_COLOR
+"$WH" status 2>"$dir/table.err"
+"$WH" status 2>"$dir/piped.err" | cat >"$dir/piped.out"
+SCRIPT
+  case "$(uname -s)" in
+    Linux) run script -qec "bash $(printf '%q' "$dir/tty.sh")" /dev/null </dev/null ;;
+    *)     run script -q /dev/null bash "$dir/tty.sh" </dev/null ;;
+  esac
+  [[ "$output" == *"AHEAD/BEH"* ]] || false
+  [[ "$output" != *"(1 worktree"* ]] || false
+  grep -q '(1 worktree' "$dir/table.err"
+  grep -q '(1 worktree' "$dir/piped.err"
+  [ "$(sed -n 1p "$dir/piped.out")" = "$(printf 'KIND\tBRANCH\tDIRTY\tAHEAD\tBEHIND\tPORTS\tPATH')" ]
 }
 
 @test "piped stdout carries no ANSI even when stderr is a terminal" {
@@ -140,9 +195,12 @@ SCRIPT
   break_default_branch
   run --separate-stderr "$WH" status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"+?/-?"* ]]
+  [[ "$output" == *$'\tfeat\tno\t?\t?\t'* ]] || false
   [[ "$stderr" == *"can't compare feat with nope: no local 'nope' branch"* ]]
   [ "$(printf '%s\n' "$stderr" | grep -c "can't compare feat")" -eq 1 ]
+  run --separate-stderr "$WH" status --human
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"+?/-?"* ]]
 }
 
 @test "a failed compare stays silent +0/-0 under --porcelain" {
@@ -170,10 +228,13 @@ SCRIPT
   make_repo
   "$WH" new feat
   mv "$WT_HOME/app/feat" "$WT_HOME/app/gone"
-  run --separate-stderr "$WH" status
+  run --separate-stderr "$WH" status --human
   [ "$status" -eq 0 ]
   [[ "$output" == *"detached?"* ]]
   [[ "$stderr" == *"for uncommitted changes"* ]]
+  run --separate-stderr "$WH" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'\tdetached\t?\t-\t-\t'* ]] || false
   run --separate-stderr "$WH" status --porcelain
   [ "$status" -eq 0 ]
   [ -z "$stderr" ]
