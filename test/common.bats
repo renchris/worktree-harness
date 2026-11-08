@@ -825,6 +825,6 @@ EOF
   FORCE_COLOR=1 run "$WH" definitely-not-a-command
   has "$output" $'\033['
   FORCE_COLOR=1 run "$WH" --no-color definitely-not-a-command
-  has "$output" "unknown command: definitely-not-a-command"
+  has "$output" "Unknown command definitely-not-a-command"
   case "$output" in *$'\033'*) false ;; esac
 }

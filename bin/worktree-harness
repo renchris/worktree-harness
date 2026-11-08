@@ -20,69 +20,167 @@ _wh_bootstrap_dir() {
   ( cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd )
 }
 
+# Root help. Needs nothing from lib/, so it works from a broken install.
 _wh_usage() {
-  cat >&2 <<'EOF'
-worktree-harness — parallel agent sessions in isolated git worktrees, safely.
+  cat <<'EOF'
+Usage:
+  worktree-harness [--cwd <DIR>] [--dry-run] [--no-color] <COMMAND> [<ARG>]...
 
-USAGE
-  worktree-harness [-C <dir>] [--dry-run] [--no-color] <command> [args]
+Run parallel agent sessions in isolated git worktrees, safely.
 
-COMMANDS
-  new <branch>          Create a runnable worktree off the base branch: copy
-                        gitignored files, install deps, run setup, assign ports.
-  launch [-- <cmd...>]  Create an auto-named worktree and exec your agent in it;
-                        when already inside a linked worktree, exec in place.
-  merge                 Rebase this worktree's branch onto the base, run the
-                        merge gate, fast-forward the LOCAL base branch. Never pushes.
-  status [--porcelain]  List worktrees: branch, ahead/behind, dirty, ports.
-  gc [--prune]          Remove merged + clean + idle worktrees (branches preserved).
-  init                  Scaffold a starter .harnessrc (detects your package manager).
-  doctor                Diagnose the environment and validate .harnessrc.
-  version | help
+Commands:
+  Work in a worktree:
+    new <BRANCH>
+        Create a runnable worktree off the base branch: copy gitignored
+        files, install dependencies, run setup, assign ports.
+    launch [-- <COMMAND> [<ARG>]...]
+        Create an auto-named worktree and run your agent in it. Inside a
+        linked worktree, run in place.
+    merge
+        Rebase this worktree's branch onto the base, run the merge gate and
+        fast-forward the LOCAL base branch. Never pushes.
 
-GLOBAL FLAGS
-  -C <dir>     Run as if started in <dir>.
-  --dry-run    Print the actions a command would take; change nothing.
-  --no-color   Disable ANSI color.
+  Inspect and clean up:
+    status [--porcelain|--json]
+        List worktrees: branch, ahead/behind, dirty, ports.
+    gc [--prune] [--dry-run]
+        Preview merged, clean, idle worktrees. --prune removes them; their
+        branches stay.
 
-Run `worktree-harness <command> --help` for command-specific options.
-Docs: README.md · docs/DESIGN.md
+  Set up:
+    init
+        Scaffold a starter .harnessrc (detects your package manager).
+    doctor
+        Diagnose the environment and validate .harnessrc.
+
+  Other:
+    help [<COMMAND>]
+        Print this help, or a command's help (default).
+    version
+        Print the version.
+
+Global Options:
+  --cwd <DIR>    Run as if started in <DIR>.
+  --dry-run      Print the actions a command would take; change nothing.
+                 Also WH_DRY_RUN=1.
+  -h, --help     Print this help.
+  --no-color     Turn off color. Also WH_NO_COLOR=1, NO_COLOR, FORCE_COLOR;
+                 --no-color > NO_COLOR > FORCE_COLOR.
+  -v, --version  Print the version.
+
+Notes:
+  Exit codes: 0 success; 1 error or usage error; 2 merge: rebase conflict;
+  64 unknown command; doctor: the number of blocking issues; launch passes
+  through its command's exit code.
+
+Learn more: https://github.com/renchris/worktree-harness#readme
 EOF
 }
 
-main() {
-  local bindir; bindir="$(_wh_bootstrap_dir "${BASH_SOURCE[0]}")"
-  WH_LIB="$(cd "$bindir/../lib" >/dev/null 2>&1 && pwd || true)"
-  [ -n "$WH_LIB" ] && [ -d "$WH_LIB" ] || { echo "worktree-harness: cannot find lib/ near $bindir" >&2; exit 1; }
-  WH_SHARE="$(cd "$bindir/../share" >/dev/null 2>&1 && pwd || echo "$bindir/../share")"
-  export WH_LIB WH_SHARE
+_wh_version_usage() {
+  cat <<'EOF'
+Usage:
+  worktree-harness version [options]
 
-  # shellcheck source=../lib/common.sh
-  . "$WH_LIB/common.sh"
-  # shellcheck source=../lib/compat.sh
-  . "$WH_LIB/compat.sh"
+Print the version.
 
-  # Global flags, before the subcommand.
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      -C)           shift; cd "${1:?-C needs a directory}" || wh_die "cannot cd to $1" ;;
-      --dry-run)    WH_DRY_RUN=1 ;;
-      --no-color)   WH_NO_COLOR=1 ;;
-      -h|--help)    _wh_usage; return 0 ;;
-      -V|--version) echo "worktree-harness $WH_VERSION"; return 0 ;;
-      --)           shift; break ;;
-      -*)           wh_die "unknown global flag: $1 (try: worktree-harness --help)" ;;
-      *)            break ;;
-    esac
-    shift
+Global Options:
+  worktree-harness --help
+
+Examples:
+    worktree-harness version
+EOF
+}
+
+# _wh_suggest <word> — a command one edit away from <word> or starting with it.
+# Prints nothing when there is none.
+_wh_suggest() {
+  local word="$1" name i
+  if [ "${#word}" -lt 2 ]; then return 0; fi
+  for name in new launch merge status gc init doctor help version; do
+    case "$name" in "$word"*) printf '%s' "$name"; return 0 ;; esac
+    i=0
+    while [ "$i" -le "${#name}" ]; do
+      case "$word" in
+        "${name:0:i}"?"${name:i+1}"|"${name:0:i}"?"${name:i}"|"${name:0:i}${name:i+1}"|"${name:0:i}${name:i+1:1}${name:i:1}${name:i+2}")
+          printf '%s' "$name"; return 0 ;;
+      esac
+      i=$((i + 1))
+    done
   done
-  export WH_DRY_RUN="${WH_DRY_RUN:-0}"
-  wh_init_style
-  wh_install_signal_traps
+}
 
-  local cmd="${1:-help}"; shift 2>/dev/null || true
+# _wh_unknown_command <word> — wh_err doesn't flush the warning queue, so do it here.
+_wh_unknown_command() {
+  local suggestion
+  suggestion="$(_wh_suggest "$1")"
+  wh_flush_pending_warnings
+  wh_err "Unknown command $1 for worktree-harness.${suggestion:+ Did you mean $suggestion?}"
+  wh_info ""
+  wh_info "See all options:"
+  wh_info "    worktree-harness --help"
+  exit 64
+}
+
+# _wh_is_command <word> — a name _wh_dispatch runs, aliases included.
+_wh_is_command() {
+  case "$1" in
+    new|create|launch|run|merge|land|gc|prune|status|ls|list|init|doctor|help|version) return 0 ;;
+  esac
+  return 1
+}
+
+# _wh_help <arg...> — `help`, `help <COMMAND>`, and anything else to U-B9's
+# _wh_help_ext when it exists.
+_wh_help() {
+  wh_flush_pending_warnings
+  case "$#:${1:-}" in
+    0:|1:-h|1:--help) _wh_usage; return 0 ;;
+  esac
+  if [ $# -eq 1 ] && _wh_is_command "$1"; then
+    _wh_dispatch "$1" --help
+    return 0
+  fi
+  if declare -F _wh_help_ext >/dev/null; then
+    _wh_help_ext "$@"
+    return 0
+  fi
+  if _wh_is_command "$1"; then shift; fi
+  _wh_unknown_command "$1"
+}
+
+# _wh_global_bool <option-as-typed> — a boolean global option: --x, --x=true,
+# --x=false or the negated spelling, resolved the way wh_parse_opts does it.
+_wh_global_bool() {
+  local name="${1%%=*}" value=true
+  case "$1" in *=*) value="${1#*=}" ;; esac
+  case "$value" in
+    true)  value=1 ;;
+    false) value=0 ;;
+    *)     wh_usage_die "" "Option $name takes true or false." ;;
+  esac
+  _wh_opt_classify "$name" ""
+  if [ "$_WH_OPT_NEG" = "1" ]; then value=$((1 - value)); fi
+  _wh_opt_builtin "" "$name" "$value"
+}
+
+# _wh_dispatch <cmd> <arg...> — run one command, aliases first.
+_wh_dispatch() {
+  local cmd="$1" newline=$'\n'
+  shift
   case "$cmd" in
-    new|create)
+    create) wh_deprecated create create "worktree-harness new"; cmd=new ;;
+    run)    wh_deprecated run run "worktree-harness launch"; cmd=launch ;;
+    land)   wh_deprecated land land "worktree-harness merge"; cmd=merge ;;
+    prune)
+      wh_deprecated prune prune "worktree-harness gc"
+      # In the queue, not wh_warn: the output mode isn't known yet.
+      WH_PENDING_WARNINGS="${WH_PENDING_WARNINGS}${newline}This only previews; pass 'gc --prune' to remove."
+      cmd=gc ;;
+    ls|list) cmd=status ;;
+  esac
+  case "$cmd" in
+    new)
       # shellcheck source=../lib/config.sh
       . "$WH_LIB/config.sh"
       # shellcheck source=../lib/pm.sh
@@ -90,7 +188,7 @@ main() {
       # shellcheck source=../lib/cmd_new.sh
       . "$WH_LIB/cmd_new.sh"
       wh_cmd_new "$@" ;;
-    launch|run)
+    launch)
       # shellcheck source=../lib/config.sh
       . "$WH_LIB/config.sh"
       # shellcheck source=../lib/pm.sh
@@ -100,19 +198,19 @@ main() {
       # shellcheck source=../lib/cmd_launch.sh
       . "$WH_LIB/cmd_launch.sh"
       wh_cmd_launch "$@" ;;
-    merge|land)
+    merge)
       # shellcheck source=../lib/config.sh
       . "$WH_LIB/config.sh"
       # shellcheck source=../lib/cmd_merge.sh
       . "$WH_LIB/cmd_merge.sh"
       wh_cmd_merge "$@" ;;
-    gc|prune)
+    gc)
       # shellcheck source=../lib/config.sh
       . "$WH_LIB/config.sh"
       # shellcheck source=../lib/cmd_gc.sh
       . "$WH_LIB/cmd_gc.sh"
       wh_cmd_gc "$@" ;;
-    status|ls|list)
+    status)
       # shellcheck source=../lib/config.sh
       . "$WH_LIB/config.sh"
       # shellcheck source=../lib/cmd_status.sh
@@ -134,10 +232,74 @@ main() {
       # shellcheck source=../lib/cmd_doctor.sh
       . "$WH_LIB/cmd_doctor.sh"
       wh_cmd_doctor "$@" ;;
-    help|--help|-h)       _wh_usage ;;
-    version|--version|-V) echo "worktree-harness $WH_VERSION" ;;
-    *) wh_err "unknown command: $cmd"; _wh_usage; exit 64 ;;
+    help|--help|-h)
+      _wh_help "$@" ;;
+    version|--version|-v|-V)
+      wh_parse_opts version 0 "" -- "$@"
+      _wh_show_version ;;
+    *) _wh_unknown_command "$cmd" ;;
   esac
+  # A command with no parser yet never closed the queue.
+  wh_flush_pending_warnings
+}
+
+main() {
+  case "${1:-}" in
+    -h|--help|help) if [ $# -le 1 ]; then _wh_usage; return 0; fi ;;
+  esac
+
+  local bindir; bindir="$(_wh_bootstrap_dir "${BASH_SOURCE[0]}")"
+  WH_LIB="$(cd "$bindir/../lib" >/dev/null 2>&1 && pwd || true)"
+  [ -n "$WH_LIB" ] && [ -d "$WH_LIB" ] || { echo "worktree-harness: cannot find lib/ near $bindir" >&2; exit 1; }
+  WH_SHARE="$(cd "$bindir/../share" >/dev/null 2>&1 && pwd || echo "$bindir/../share")"
+  export WH_LIB WH_SHARE
+
+  # shellcheck source=../lib/common.sh
+  . "$WH_LIB/common.sh"
+  # shellcheck source=../lib/compat.sh
+  . "$WH_LIB/compat.sh"
+
+  # Warnings wait until the command's parser knows the output mode, or one would
+  # reach stderr ahead of a `--json` document.
+  WH_QUEUE_WARNINGS=1
+
+  # Global options, before the subcommand. -C and -V stay accepted and unadvertised.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -C)
+        [ $# -ge 2 ] && [ -n "$2" ] || wh_usage_die "" "-C needs a directory."
+        shift; _wh_opt_builtin "" -C "$1" ;;
+      -C=*)
+        [ -n "${1#-C=}" ] || wh_usage_die "" "-C needs a directory."
+        _wh_opt_builtin "" -C "${1#-C=}" ;;
+      --cwd)
+        [ $# -ge 2 ] || wh_usage_die "" "Option --cwd needs a value."
+        shift; _wh_opt_builtin "" --cwd "$1" ;;
+      --cwd=*)
+        _wh_opt_builtin "" --cwd "${1#--cwd=}" ;;
+      --dry-run|--dry-run=*|--no-dry-run|--no-dry-run=*|--no-color|--no-color=*|--color|--color=*)
+        _wh_global_bool "$1" ;;
+      -h|--help)
+        _wh_usage; return 0 ;;
+      -v|-V|--version)
+        _wh_show_version ;;
+      --)
+        shift; break ;;
+      -*)
+        wh_usage_die "" "Unknown option $1 for worktree-harness." unknown_option ;;
+      *)
+        break ;;
+    esac
+    shift
+  done
+  export WH_DRY_RUN="${WH_DRY_RUN:-0}"
+  wh_init_style
+  wh_install_signal_traps
+
+  if [ -z "${1:-}" ] && [ "${__WH_PARSE_ONLY:-}" = "1" ]; then exit 0; fi
+
+  local cmd="${1:-help}"; shift 2>/dev/null || true
+  _wh_dispatch "$cmd" "$@"
 }
 
 main "$@"
