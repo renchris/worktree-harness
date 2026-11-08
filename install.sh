@@ -32,10 +32,11 @@ usage() {
     '    -h, --help        Print this help.' \
     '    --version         Print the version of this installer.' \
     "    --prefix <DIR>    Install under <DIR> (default: \$WORKTREE_HARNESS_PREFIX, else ~/.local)." \
+    '    --json            Print the result as one JSON document on stdout.' \
     '' \
     'Examples:' \
     '    sh install.sh' \
-    '    sh install.sh --prefix <DIR>' \
+    '    sh install.sh --json' \
     '    curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh -s -- --prefix <DIR>' \
     '' \
     'Notes:' \
@@ -51,6 +52,8 @@ usage() {
     '    still print. CI, when not empty, hides the shell integration and' \
     '    completion offers.' \
     '    Under curl | sh the script is on stdin, so pass options after sh -s --.' \
+    '    --json writes nothing on stderr when it succeeds, and a failure is one JSON' \
+    '    line on stderr. It works the same under curl | sh -s -- --json.' \
     '' \
     'Learn more:' \
     '    https://github.com/renchris/worktree-harness'
@@ -58,9 +61,77 @@ usage() {
 
 # The subshells keep a closed stream from aborting an install that has started:
 # `set -e` kills a bare printf on a closed pipe even with SIGPIPE ignored.
-# say prints on stderr, out on stdout. C6 moves the out lines to stderr.
-say() { ( printf '%s\n' "$*" >&2 ) || :; }
-out() { ( printf '%s\n' "$*" ) 2>/dev/null || :; }
+# say prints on stderr, out on stdout. C6 moves the out lines to stderr. Under
+# --json neither prints: the document and the error line are the only output.
+say() { if [ -z "$JSON" ]; then ( printf '%s\n' "$*" >&2 ) || :; fi; }
+out() { if [ -z "$JSON" ]; then ( printf '%s\n' "$*" ) 2>/dev/null || :; fi; }
+
+# --- JSON (--json) ------------------------------------------------------------
+# Error reasons: invalid_arguments unknown_option conflict clone_failed internal_error canceled.
+# Warning reasons, new to install.sh (Reference K has no PATH reason): not_on_path shadowed.
+JSON=""
+JSON_SENT=""
+JSON_WARNINGS=""
+FAIL_REASON=""
+ERRFILE=""
+
+# json_str <s> — <s> as a JSON string. Tab and newline are escaped; other control
+# characters are dropped (a prefix holding one is refused before it gets here).
+json_str() {
+  printf '"'
+  printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\013-\037\177' |
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$(printf '\t')/\\\\t/g" |
+    awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+  printf '"'
+}
+
+# json_doc <compact-json> — the result on stdout: as is when piped, indented with 2
+# spaces on a terminal. String contents stay untouched.
+json_doc() {
+  if [ ! -t 1 ]; then
+    ( printf '%s\n' "$1" ) 2>/dev/null || :
+    return 0
+  fi
+  ( printf '%s\n' "$1" | LC_ALL=C awk '
+    function newline(level, i) { printf "\n"; for (i = 0; i < level; i++) printf "  " }
+    {
+      n = length($0)
+      for (p = 1; p <= n; p++) {
+        c = substr($0, p, 1)
+        if (in_string) {
+          printf "%s", c
+          if (c == "\\") { p++; printf "%s", substr($0, p, 1) }
+          else if (c == "\"") in_string = 0
+        } else if (c == "\"") {
+          in_string = 1; printf "%s", c
+        } else if (c == "{" || c == "[") {
+          after = substr($0, p + 1, 1)
+          if (after == "}" || after == "]") { printf "%s%s", c, after; p++ }
+          else { printf "%s", c; depth++; newline(depth) }
+        } else if (c == "}" || c == "]") {
+          depth--; newline(depth); printf "%s", c
+        } else if (c == ",") {
+          printf "%s", c; newline(depth)
+        } else if (c == ":") {
+          printf ": "
+        } else {
+          printf "%s", c
+        }
+      }
+    }
+    END { printf "\n" }' ) 2>/dev/null || :
+}
+
+# json_line <reason> <message> [<data-json>] — the one error line, on the stderr the
+# run started with (fd 3), at most once per run.
+json_line() {
+  if [ -n "$JSON_SENT" ]; then return 0; fi
+  JSON_SENT=1
+  jl_data=""
+  if [ -n "${3:-}" ]; then jl_data=",\"data\":$3"; fi
+  ( printf '{"status":"error","reason":"%s","message":%s%s}\n' "$1" "$(json_str "$2")" \
+    "$jl_data" >&3 ) 2>/dev/null || :
+}
 
 # Rich output needs a terminal that can show it. Chosen once, on stdout's terminal.
 pick_glyphs() {
@@ -94,8 +165,13 @@ say_error() {
   say "$ERROR$1"
 }
 
-# fail <exit> <headline> [<detail>] [<instruction> <command>]
+# fail <exit> <headline> [<detail>] [<instruction> <command>] — FAIL_REASON names the
+# JSON reason (default internal_error).
 fail() {
+  if [ -n "$JSON" ]; then
+    json_line "${FAIL_REASON:-internal_error}" "$2${3:+ $3}"
+    exit "$1"
+  fi
   say_error "$2"
   if [ -n "${3:-}" ]; then say "$(row Detail "$3")"; fi
   if [ -n "${4:-}" ]; then
@@ -147,7 +223,12 @@ recovery_command() {
   fi
 }
 
+# usage_error <message> [<reason>] — reason defaults to invalid_arguments.
 usage_error() {
+  if [ -n "$JSON" ]; then
+    json_line "${2:-invalid_arguments}" "$1"
+    exit 2
+  fi
   say "$1"
   say ""
   say "See all options:"
@@ -203,6 +284,7 @@ check_writable() {
   for cw_path in "$(dirname "$SHARE_DIR")" "$BIN_DIR"; do
     cw_base=$(nearest_directory "$cw_path")
     if [ ! -w "$cw_base" ]; then
+      FAIL_REASON=invalid_arguments
       fail 1 "Can't install to $PREFIX. $cw_base isn't writable." "Nothing was changed." \
         "Choose a directory you can write to" "$(recovery_command '<DIR>')"
     fi
@@ -217,6 +299,7 @@ check_overlap() {
   case "$src_real/" in "${share_real%/}"/*) overlap=1 ;; esac
   if [ -e "$SHARE_DIR/.git" ]; then overlap=1; fi
   if [ -n "$overlap" ]; then
+    FAIL_REASON=conflict
     fail 1 "Can't install into $SHARE_DIR. It's the source checkout." "" \
       "Run the installer from another directory, or choose another prefix" \
       "$(recovery_command '<DIR>')"
@@ -297,6 +380,7 @@ clone_source() {
     detail=$(printf '%s\n' "$clone_err" | grep . | tail -n 1) || detail=""
   fi
   # A failed clone keeps git's own code until C8.
+  FAIL_REASON=clone_failed
   fail "$rc" "Couldn't clone $REPO_URL_SHOWN. Nothing was changed." \
     "git: ${detail:-no error text (exit $rc)}" \
     "Check access to the repository" "git ls-remote -- $(shq "$REPO_URL_SHOWN")"
@@ -384,12 +468,11 @@ report_path() {
   WH=$(shq "$BIN_DIR/worktree-harness")
   found=$(command -v worktree-harness 2>/dev/null) || found=""
   if [ -z "$found" ]; then
-    out ""
-    out "${WARNING}worktree-harness isn't on PATH, so the command won't resolve. Add it:"
     case "${SHELL:-}" in
-      */fish|fish) out "    fish_add_path $(shq "$BIN_DIR")" ;;
-      *) out "    export PATH=$(shq "$BIN_DIR"):\"\$PATH\"" ;;
+      */fish|fish) path_fix="fish_add_path $(shq "$BIN_DIR")" ;;
+      *) path_fix="export PATH=$(shq "$BIN_DIR"):\"\$PATH\"" ;;
     esac
+    path_warning not_on_path "worktree-harness isn't on PATH, so the command won't resolve. Add it:" "$path_fix"
     return 0
   fi
   found_dir=$(physical_dir "$(dirname "$found")") || found_dir=""
@@ -398,8 +481,31 @@ report_path() {
     WH=worktree-harness
     return 0
   fi
+  path_warning shadowed "worktree-harness resolves to $found, not this install, so the bare command runs that copy."
+}
+
+# path_warning <reason> <message> [<command>] — printed, or kept for the document.
+path_warning() {
+  if [ -n "$JSON" ]; then
+    JSON_WARNINGS="${JSON_WARNINGS:+$JSON_WARNINGS,}{\"reason\":\"$1\",\"message\":$(json_str "$2${3:+ $3}")}"
+    return 0
+  fi
   out ""
-  out "${WARNING}worktree-harness resolves to $found, not this install, so the bare command runs that copy."
+  out "$WARNING$2"
+  if [ -n "${3:-}" ]; then out "    $3"; fi
+}
+
+# The --json result. next ignores the guidance variable, because a caller needs it.
+report_json() {
+  case "$STATE" in fresh) outcome=installed ;; *) outcome=$STATE ;; esac
+  version_json=null
+  if [ -n "$NEW_VERSION" ]; then version_json=$(json_str "$NEW_VERSION"); fi
+  next_argv0="$BIN_DIR/worktree-harness"
+  if [ "$WH" = worktree-harness ]; then next_argv0=worktree-harness; fi
+  doc="{\"install\":{\"path\":$(json_str "$BIN_DIR/worktree-harness"),\"version\":$version_json}"
+  doc="$doc,\"outcome\":\"$outcome\",\"next\":[{\"command\":$(json_str "$WH doctor"),\"argv\":[$(json_str "$next_argv0"),\"doctor\"]}]"
+  if [ -n "$JSON_WARNINGS" ]; then doc="$doc,\"warnings\":[$JSON_WARNINGS]"; fi
+  json_doc "$doc}"
 }
 
 # next_step <instruction> <command>...
@@ -503,6 +609,30 @@ report_exit() {
   esac
 }
 
+# report_exit for --json: the same facts as one error line, unless fail sent one.
+report_exit_json() {
+  rj_message=""
+  case "$PHASE" in
+    swapping)
+      if [ -n "$KEPT" ]; then
+        rj_message="Couldn't restore $SHARE_DIR. The previous install is in $KEPT."
+      elif [ -n "$RESTORED" ]; then
+        rj_message="Couldn't replace $SHARE_DIR. The previous install was restored."
+      fi
+      ;;
+    swapped)
+      rj_message="$SHARE_DIR was replaced, but $BIN_DIR/worktree-harness wasn't updated. Run the installer again: $(recovery_command "$(shq "$PREFIX")")"
+      ;;
+  esac
+  case "$1" in
+    129|130|143) json_line canceled "Canceled.${rj_message:+ $rj_message}" '{"remote":"none"}' ;;
+    *)
+      if [ "$PHASE" = before ]; then rj_message="Nothing was changed."; fi
+      json_line internal_error "The install stopped with exit status $1.${rj_message:+ $rj_message}"
+      ;;
+  esac
+}
+
 on_exit() {
   status=$?
   trap - EXIT
@@ -524,11 +654,14 @@ on_exit() {
       PHASE=before
     fi
   fi
-  if [ "$status" -ne 0 ]; then report_exit "$status"; fi
+  if [ "$status" -ne 0 ]; then
+    if [ -n "$JSON" ]; then report_exit_json "$status"; else report_exit "$status"; fi
+  fi
   remove_temp "$STAGE"
   remove_temp "$LINK_DIR"
   remove_temp "$CLEANUP"
   remove_temp "$OLD"
+  remove_temp "$ERRFILE"
   exit "$status"
 }
 
@@ -559,6 +692,21 @@ main() {
   done
   if [ "${1:-}" = help ]; then usage; exit 0; fi
 
+  # The output mode first, so a usage error in any position is reported in it.
+  # The last of --json and --no-json wins; a --prefix value is never an option.
+  js_skip=""
+  for a do
+    if [ -n "$js_skip" ]; then js_skip=""; continue; fi
+    case "$a" in
+      --) break ;;
+      --prefix) js_skip=1 ;;
+      --json|--json=true) JSON=1 ;;
+      --no-json|--json=false) JSON="" ;;
+    esac
+  done
+  # fd 3 keeps the run's stderr for the error line once tool stderr goes to a file.
+  if [ -n "$JSON" ]; then exec 3>&2; fi
+
   OPT_PREFIX=""
   OPT_VERSION=""
   while [ "$#" -gt 0 ]; do
@@ -569,6 +717,8 @@ main() {
         break
         ;;
       --version) OPT_VERSION=1 ;;
+      --json|--json=true|--no-json|--json=false) ;;
+      --json=*) usage_error "Option --json takes true or false, not ${1#--json=}." ;;
       --prefix)
         # An empty prefix must never reach the install paths: it would mean /share.
         if [ -z "${2:-}" ]; then usage_error "Option --prefix needs a value."; fi
@@ -579,7 +729,7 @@ main() {
         OPT_PREFIX=${1#--prefix=}
         if [ -z "$OPT_PREFIX" ]; then usage_error "Option --prefix needs a value."; fi
         ;;
-      -*) usage_error "Unknown option $1 for install.sh." ;;
+      -*) usage_error "Unknown option $1 for install.sh." unknown_option ;;
       *) usage_error "Unexpected argument $1 for install.sh." ;;
     esac
     shift
@@ -589,7 +739,11 @@ main() {
   if [ "${__WORKTREE_HARNESS_PARSE_ONLY:-}" = 1 ]; then exit 0; fi
 
   if [ -n "$OPT_VERSION" ]; then
-    printf '%s\n' "$WH_INSTALLER_VERSION"
+    if [ -n "$JSON" ]; then
+      json_doc "{\"version\":$(json_str "$WH_INSTALLER_VERSION")}"
+    else
+      printf '%s\n' "$WH_INSTALLER_VERSION"
+    fi
     exit 0
   fi
 
@@ -612,10 +766,16 @@ main() {
   elif [ -n "${HOME:-}" ]; then
     PREFIX="$HOME/.local"
   else
+    FAIL_REASON=invalid_arguments
     fail 2 "Can't pick an install location. HOME isn't set." "" \
       "Install to a named directory" "$(recovery_command '<DIR>')"
   fi
   case $PREFIX in /*) ;; *) PREFIX="$(pwd)/${PREFIX#./}" ;; esac
+  # The document would have to drop or mangle it, so --json refuses before any write.
+  if [ -n "$JSON" ] && [ "$(printf '%s' "$PREFIX" | LC_ALL=C tr -d '\000-\037\177')" != "$PREFIX" ]; then
+    FAIL_REASON=invalid_arguments
+    fail 2 "Can't install to a path holding a control character with --json. Nothing was changed."
+  fi
   SHARE_DIR="$PREFIX/share/worktree-harness"
   BIN_DIR="$PREFIX/bin"
 
@@ -636,6 +796,16 @@ main() {
   trap 'on_signal 130' INT
   trap 'on_signal 143' TERM
   trap 'on_signal 129' HUP
+
+  # --json is non-interactive from its first release, and raw tool messages
+  # (mkdir, cp, ln, git) would break the one-line error contract.
+  if [ -n "$JSON" ]; then
+    GIT_TERMINAL_PROMPT=0
+    export GIT_TERMINAL_PROMPT
+    ERRFILE=$(mktemp "${TMPDIR:-/tmp}/worktree-harness-stderr.XXXXXX" 2>/dev/null) ||
+      tool_failed "$?" "Failed to create a temporary file."
+    exec 2>"$ERRFILE"
+  fi
 
   check_writable
 
@@ -666,7 +836,7 @@ main() {
 
   report_receipt
   report_path
-  report_next_steps
+  if [ -n "$JSON" ]; then report_json; else report_next_steps; fi
 }
 
 # Called only here, so a truncated `curl | sh` body fails to parse or defines
