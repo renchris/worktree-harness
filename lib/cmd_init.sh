@@ -2,24 +2,49 @@
 # cmd_init.sh — scaffold a starter .harnessrc in the repo root, pre-filled with
 # the detected package manager and documented defaults. Never overwrites.
 
+_wh_init_usage() {
+  cat <<'EOF'
+Usage:
+  worktree-harness init [options]
+
+Write a starter .harnessrc in the repository root.
+
+Options:
+  --dry-run   Show what would be written and change nothing.
+
+Global Options:
+  worktree-harness --help
+
+Examples:
+    worktree-harness init
+    worktree-harness init --dry-run
+
+Notes:
+  An existing .harnessrc is never overwritten: init stops with exit 1. The new
+  file names the package manager detected from your lockfile.
+
+  Stdout carries only the new file's path, so rc=$(worktree-harness init)
+  captures it. At an interactive terminal the receipt shows the path instead.
+  --dry-run prints nothing on stdout.
+EOF
+}
+
 wh_cmd_init() {
-  case "${1:-}" in
-    -h|--help) wh_info "worktree-harness init — scaffold a starter .harnessrc (detects your package manager)."; return 0 ;;
-    --dry-run) WH_DRY_RUN=1 ;;
-    "") ;;
-    *) wh_die "init: unexpected argument '$1'" ;;
-  esac
+  wh_parse_opts init 0 "" -- "$@"
   local root; root="$(wh_repo_root)" || wh_die "not inside a git repository."
   [ -n "$root" ] || wh_die "not inside a git repository."
   local rc="$root/.harnessrc"
-  [ -e "$rc" ] && wh_die ".harnessrc already exists at $rc — edit it directly."
+  local exists_msg=".harnessrc already exists at $rc — edit it directly."
+  # A dry run stops here too, so it never promises a write the real run refuses.
+  if [ -e "$rc" ] || [ -h "$rc" ]; then wh_die "$exists_msg"; fi
   local pm; pm="$(wh_detect_pm "$root")"
 
   if [ "${WH_DRY_RUN:-0}" = "1" ]; then
     wh_info "dry-run: would write $rc (detected package manager: $pm)"; return 0
   fi
 
-  cat > "$rc" <<EOF
+  local write_status=0
+  wh_write_new "$rc" <<EOF || write_status=$?
 # .harnessrc — worktree-harness project config. Sourced as bash; treat it like a
 # Makefile (only run worktree-harness in repos you trust). Every key is optional;
 # the values shown are the defaults unless noted.
@@ -59,6 +84,12 @@ HARNESS_AGENT="claude"
 HARNESS_GC_KEEP=( )
 HARNESS_GC_IDLE_MIN="30"
 EOF
+  case "$write_status" in
+    0) ;;
+    1) wh_die "$exists_msg" ;;
+    *) wh_die "Couldn't write $rc. Check that the repository root is writable, then re-run." ;;
+  esac
+  wh_print_id "$rc"
   wh_ok "wrote $rc (detected package manager: $pm)"
   wh_info "Review it, then create your first worktree: worktree-harness new my-feature"
 }

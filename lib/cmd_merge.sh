@@ -10,29 +10,47 @@
 # issue #122). Fails closed on any real conflict: stop, report, let a human decide.
 
 _wh_merge_usage() {
-  cat >&2 <<'EOF'
-worktree-harness merge [--no-verify]
+  cat <<'EOF'
+Usage:
+  worktree-harness merge [options]
 
-From inside a worktree, land its branch onto the LOCAL default branch:
-  1. rebase the branch onto the base (origin/<default> or local <default>),
-  2. verify the default branch is an ancestor of the rebased branch,
-  3. run HARNESS_MERGE_GATE (skip with --no-verify),
-  4. fast-forward the default branch (ref-only when it isn't checked out).
-Never pushes. Honors --dry-run.
+Land this worktree's branch on the LOCAL default branch. Never pushes.
+
+Options:
+  --dry-run     Show the steps and change nothing.
+  --no-verify   Skip the merge gate.
+
+Global Options:
+  worktree-harness --help
+
+Examples:
+    worktree-harness merge
+    worktree-harness merge --no-verify
+
+Notes:
+  Run it from inside a worktree. It rebases the branch onto the base (the
+  remote's or the local default branch), checks that the default branch is an
+  ancestor of the result, runs the merge gate, then fast-forwards the default
+  branch. Only the ref moves when that branch isn't checked out anywhere.
+  HARNESS_MERGE_GATE, a .harnessrc setting, names the gate.
+
+  Stdout carries only the landed commit's full SHA, also when the branch had
+  already landed, so sha=$(worktree-harness merge) captures it. At an
+  interactive terminal the receipt shows a short SHA instead. --dry-run prints
+  nothing on stdout.
+
+  Exit codes: 0 landed or already landed; 1 error; 2 rebase conflict (resolve
+  it, or run git rebase --abort).
+
+  WH_NO_FETCH=1 uses the last-known remote ref instead of fetching. Empty or
+  unset means fetch.
 EOF
 }
 
 wh_cmd_merge() {
-  local skip_verify=0
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      -h|--help)   _wh_merge_usage; return 0 ;;
-      --no-verify) skip_verify=1 ;;
-      --dry-run)   WH_DRY_RUN=1 ;;
-      *)           wh_die "merge: unknown argument '$1'" ;;
-    esac
-    shift
-  done
+  local skip_verify=0 nl=$'\n'
+  wh_parse_opts merge 0 "--no-verify=skip_verify" -- "$@"
+  wh_require_repo merge
   wh_load_config
 
   local branch def
@@ -52,17 +70,20 @@ wh_cmd_merge() {
 
   if git merge-base --is-ancestor "$branch" "$def"; then
     wh_ok "$def already contains $branch ($(git rev-parse --short "$def")) — nothing to do."
+    if [ "${WH_DRY_RUN:-0}" != "1" ]; then wh_print_id "$(git rev-parse "$def")"; fi
     return 0
   fi
 
   local base; base="$(wh_base_ref)"          # may fetch (stderr); echoes ref on stdout
   wh_info "── $branch → $def  (base: $base) ──"
-  git --no-pager log --oneline --reverse "$base..$branch" 2>/dev/null | sed 's/^/   + /' >&2 || true
+  git --no-pager log --no-decorate --format='%h %s' --reverse "$base..$branch" 2>/dev/null \
+    | wh_sanitize_stream | sed 's/^/   + /' >&2 || true
 
-  # Where is the default branch checked out (if anywhere)?
+  # Where is the default branch checked out (if anywhere)? substr, because a
+  # worktree path can hold spaces.
   local def_wt
   def_wt="$(git worktree list --porcelain | awk -v b="branch refs/heads/$def" '
-    /^worktree /{w=$2} $0==b{print w}')"
+    /^worktree /{w=substr($0,10)} $0==b{print w}')"
 
   if [ "${WH_DRY_RUN:-0}" = "1" ]; then
     wh_info "dry-run: rebase onto $base → ancestry gate → $([ "$skip_verify" = 1 ] && echo 'skip gate' || echo "gate: ${HARNESS_MERGE_GATE}") → ff $def"
@@ -70,8 +91,8 @@ wh_cmd_merge() {
     return 0
   fi
 
-  wh_step "rebase $branch onto $base"
-  if ! git rebase "$base"; then
+  wh_step "Rebasing $branch onto ${base}…"
+  if ! git rebase "$base" >&2; then
     wh_err "rebase hit a conflict git/rerere could not auto-resolve — $def NOT touched."
     wh_info "  resolve here, then: git rebase --continue && worktree-harness merge"
     wh_info "  or bail entirely:   git rebase --abort"
@@ -82,22 +103,31 @@ wh_cmd_merge() {
   git merge-base --is-ancestor "$def" "$branch" \
     || wh_die "post-rebase ancestry check failed — refusing to move $def ($def has commits not in $branch; the base diverged)."
 
+  local prepared="rebased"
   if [ "$skip_verify" = "1" ]; then
     wh_warn "--no-verify — skipping the merge gate."
   elif [ "$HARNESS_MERGE_GATE" = "none" ]; then
     : # no gate configured
   else
-    wh_step "merge gate: $HARNESS_MERGE_GATE"
-    eval "$HARNESS_MERGE_GATE" \
-      || wh_die "merge gate failed on the rebased tree — $def NOT updated. Fix, commit, re-run."
+    wh_step "Running the merge gate: ${HARNESS_MERGE_GATE}…"
+    if ! eval "$HARNESS_MERGE_GATE" >&2; then
+      wh_err "merge gate failed on the rebased tree: $HARNESS_MERGE_GATE. $def was not updated."
+      wh_info "Fix the failure, commit, then re-run:"
+      wh_info "  worktree-harness merge"
+      exit 1
+    fi
+    prepared="rebased and gated"
   fi
 
   if [ -n "$def_wt" ]; then
-    wh_step "$def is checked out at $def_wt — fast-forwarding there"
-    git -C "$def_wt" merge --ff-only "$branch"
+    wh_step "Fast-forwarding $def, checked out at ${def_wt}…"
+    git -C "$def_wt" merge --ff-only "$branch" >&2 \
+      || wh_die "Couldn't fast-forward $def at $def_wt to $branch (git's message is above). $branch is $prepared; $def is unchanged.${nl}Fix $def_wt, then finish the landing without repeating the rebase or the gate:${nl}    git -C $(printf %q "$def_wt") merge --ff-only $(printf %q "$branch")"
   else
-    wh_step "$def is checked out nowhere — ref-only fast-forward (no working tree touched)"
-    git fetch . "$branch:$def"
+    wh_step "Moving $def to $branch without touching a working tree…"
+    git fetch . "$branch:$def" \
+      || wh_die "Couldn't move $def to $branch (git's message is above). $branch is $prepared; $def is unchanged.${nl}Finish the landing without repeating the rebase or the gate:${nl}    git fetch . $(printf %q "$branch:$def")"
   fi
   wh_ok "$def now at $(git rev-parse --short "$def") — $branch landed. Local-only (never pushed)."
+  wh_print_id "$(git rev-parse "$def")"
 }
