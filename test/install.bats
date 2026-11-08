@@ -33,7 +33,8 @@ common_version() { sed -n 's/^WH_VERSION="\(.*\)"$/\1/p' "$WH_ROOT/lib/common.sh
 @test "streams as of Wave B" {
   run --separate-stderr sh "$WH_ROOT/install.sh"
   [ "$status" -eq 0 ]
-  assert_has "$output" "installed: $P/bin/worktree-harness"
+  assert_has "$output" "Installed worktree-harness"
+  assert_has "$output" "$P/bin/worktree-harness"
   assert_has "$stderr" "(local checkout)"
   run --separate-stderr sh "$WH_ROOT/install.sh" --bogus
   [ "$status" -eq 2 ]
@@ -431,6 +432,7 @@ common_version() { sed -n 's/^WH_VERSION="\(.*\)"$/\1/p' "$WH_ROOT/lib/common.sh
 
 @test "TERM after the swap says the link wasn't updated" {
   install_once
+  touch "$P/share/worktree-harness/previous"
   make_shim ln 'kill -TERM "$PPID"; exit 0'
   PATH="$SHIMS:$PATH" run --separate-stderr sh "$WH_ROOT/install.sh"
   [ "$status" -eq 143 ]
