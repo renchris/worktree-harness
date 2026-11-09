@@ -48,6 +48,9 @@ All notable changes are documented here. This project follows
   `--version --json` prints `{"version":"<v>"}`.
 
 ### Changed
+- `install.sh` prints only the installed command's path on stdout (when
+  captured, piped or under `CI`); progress, receipt and next steps moved to
+  stderr.
 - Help goes to stdout. Root help is grouped by task, with `Usage:`,
   `Commands:`, `Global Options:` and `Learn more:` headings and a Notes block
   of exit codes.

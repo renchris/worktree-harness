@@ -201,10 +201,11 @@ line_count() { printf '%s\n' "$1" | grep -c .; }
   p2="$BATS_TEST_TMPDIR/p2"
   WORKTREE_HARNESS_PREFIX="$p1" run --separate-stderr sh "$WH_ROOT/install.sh"
   [ "$status" -eq 0 ]
-  assert_has "$output" "Installed worktree-harness $(common_version)"
-  assert_has "$output" " to $p1/bin/worktree-harness."
-  assert_has "$output" "Next steps:"
-  assert_has "$output" "    $p1/bin/worktree-harness new <BRANCH>"
+  assert_has "$stderr" "Installed worktree-harness $(common_version)"
+  assert_has "$stderr" " to $p1/bin/worktree-harness."
+  assert_has "$stderr" "Next steps:"
+  assert_has "$stderr" "    $p1/bin/worktree-harness new <BRANCH>"
+  [ "$output" = "$p1/bin/worktree-harness" ]
   assert_lacks "$output$stderr" '"outcome"'
   plain_out="${output//$p1/PREFIX}"
   plain_err="${stderr//$p1/PREFIX}"

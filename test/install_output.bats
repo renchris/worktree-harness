@@ -59,13 +59,13 @@ run_script_in_pty() {
   [ -z "$(ls -A "$TMPDIR")" ]
 }
 
-@test "streams as of Wave B: a failed clone's message is on stderr" {
+@test "streams: a failed clone's progress and message are on stderr" {
   export WORKTREE_HARNESS_REPO="file:///nonexistent"
   run --separate-stderr piped_install
   [ "$status" -ne 0 ]
   assert_has "$stderr" "Error: Couldn't clone file:///nonexistent. Nothing was changed."
-  assert_lacks "$output" "Couldn't clone"
-  assert_has "$output" "Cloning file:///nonexistent..."
+  assert_has "$stderr" "Cloning file:///nonexistent..."
+  [ -z "$output" ]
 }
 
 @test "a failed clone shows a Detail row and one recovery command" {
@@ -390,9 +390,9 @@ run_script_in_pty() {
   make_full_fixture
   run --separate-stderr piped_install
   [ "$status" -eq 0 ]
-  assert_has "$output" "Installed worktree-harness $(common_version)"
-  assert_has "$output" "commit $(git -C "$FIXTURE" rev-parse --short HEAD), from "
-  assert_has "$output" " to $P/bin/worktree-harness."
+  assert_has "$stderr" "Installed worktree-harness $(common_version)"
+  assert_has "$stderr" "commit $(git -C "$FIXTURE" rev-parse --short HEAD), from "
+  assert_has "$stderr" " to $P/bin/worktree-harness."
 }
 
 @test "WORKTREE_HARNESS_REF pins the clone and the receipt names it" {
@@ -405,7 +405,7 @@ run_script_in_pty() {
   WORKTREE_HARNESS_REF=v9 run --separate-stderr piped_install
   [ "$status" -eq 0 ]
   [ ! -e "$P/share/worktree-harness/bin/later" ]
-  assert_has "$output" "(commit $commit, from v9)"
+  assert_has "$stderr" "(commit $commit, from v9)"
   WORKTREE_HARNESS_REF="" run --separate-stderr piped_install
   [ "$status" -eq 0 ]
   [ -e "$P/share/worktree-harness/bin/later" ]
@@ -418,22 +418,22 @@ run_script_in_pty() {
   copy_checkout "$outer/copy"
   run --separate-stderr sh "$outer/copy/install.sh"
   [ "$status" -eq 0 ]
-  assert_lacks "$output" "commit "
-  assert_has "$output" "Installed worktree-harness $(common_version) to $P/bin/worktree-harness."
+  assert_lacks "$stderr" "commit "
+  assert_has "$stderr" "Installed worktree-harness $(common_version) to $P/bin/worktree-harness."
 }
 
 @test "fresh, replaced, and unchanged receipts" {
   run --separate-stderr sh "$WH_ROOT/install.sh"
   [ "$status" -eq 0 ]
-  assert_has "$output" "Installed worktree-harness"
+  assert_has "$stderr" "Installed worktree-harness"
   assert_lacks "$output$stderr" "Replaced"
   inode="$(ls -di "$P/share/worktree-harness")"
 
   run --separate-stderr sh "$WH_ROOT/install.sh"
   [ "$status" -eq 0 ]
   assert_has "$stderr" "worktree-harness $(common_version) is already installed."
-  assert_lacks "$output" "Installed"
-  assert_has "$output" "isn't on PATH"
+  assert_lacks "$stderr" "Installed"
+  assert_has "$stderr" "isn't on PATH"
   [ "$(ls -di "$P/share/worktree-harness")" = "$inode" ]
 
   src="$BATS_TEST_TMPDIR/src"
@@ -442,7 +442,7 @@ run_script_in_pty() {
   run --separate-stderr sh "$src/install.sh"
   [ "$status" -eq 0 ]
   assert_has "$stderr" "Replaced $(common_version) (different content)."
-  assert_has "$output" "Installed worktree-harness"
+  assert_has "$stderr" "Installed worktree-harness"
 
   installed="$P/share/worktree-harness/lib/common.sh"
   sed 's/^WH_VERSION=.*/WH_VERSION="0.1.0"/' "$installed" > "$installed.new"
@@ -501,7 +501,7 @@ run_script_in_pty() {
 
 # --- Closed streams -----------------------------------------------------------
 
-@test "a closed stream doesn't abort the install" {
+@test "closed streams still install and exit 0" {
   run sh -c 'sh "$1" --prefix "$2" >&-' _ "$WH_ROOT/install.sh" "$BATS_TEST_TMPDIR/p1"
   [ "$status" -eq 0 ]
   "$BATS_TEST_TMPDIR/p1/bin/worktree-harness" --version
@@ -514,13 +514,42 @@ run_script_in_pty() {
   run bash -c 'sh "$1" --prefix "$2" | true; echo "${PIPESTATUS[0]}"' _ "$WH_ROOT/install.sh" "$BATS_TEST_TMPDIR/p3"
   [ "${lines[${#lines[@]} - 1]}" = "0" ]
   "$BATS_TEST_TMPDIR/p3/bin/worktree-harness" --version
+
+  run sh -c 'sh "$1" --prefix "$2" >&- 2>&-' _ "$WH_ROOT/install.sh" "$BATS_TEST_TMPDIR/p4"
+  [ "$status" -eq 0 ]
+  "$BATS_TEST_TMPDIR/p4/bin/worktree-harness" --version
 }
 
-@test "a closed stream doesn't abort a piped install" {
+@test "a closed stderr doesn't abort a piped install, and stdout is the path" {
   make_full_fixture
-  run bash -c 'cd "$1" && sh -s < "$2" 2>&- | head -n 1 >/dev/null; echo "${PIPESTATUS[0]}"' _ "$EMPTY" "$WH_ROOT/install.sh"
+  run bash -c 'cd "$1" && sh -s < "$2" 2>&- | head -n 1; echo "${PIPESTATUS[0]}"' _ "$EMPTY" "$WH_ROOT/install.sh"
+  [ "${lines[0]}" = "$P/bin/worktree-harness" ]
   [ "${lines[${#lines[@]} - 1]}" = "0" ]
   "$P/bin/worktree-harness" --version
+}
+
+# --- Stdout contract ----------------------------------------------------------
+
+@test "stdout is a bare path when captured" {
+  p="$(sh "$WH_ROOT/install.sh" </dev/null 2>/dev/null)"
+  [ "$p" = "$P/bin/worktree-harness" ]
+  "$p" --version
+}
+
+@test "an interactive TTY gets the receipt and no bare path line" {
+  TERM=dumb run_script_in_pty "$WH_ROOT/install.sh"
+  [ "$status" -eq 0 ]
+  assert_has "$output" "Installed worktree-harness"
+  if printf '%s\n' "$output" | grep -Fxq -- "$P/bin/worktree-harness"; then
+    printf 'a bare path line on an interactive terminal: %s\n' "$output"
+    false
+  fi
+}
+
+@test "CI=1 on a TTY prints the bare path" {
+  CI=1 TERM=dumb run_script_in_pty "$WH_ROOT/install.sh"
+  [ "$status" -eq 0 ]
+  has_line "$output" "$P/bin/worktree-harness"
 }
 
 # --- Glyph modes --------------------------------------------------------------

@@ -59,9 +59,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install into a temp prefix and run --version
+      - name: Install into a temp prefix, check stdout is the path, run --version
         run: |
-          WORKTREE_HARNESS_PREFIX="$RUNNER_TEMP/prefix" sh ./install.sh
+          p=$(WORKTREE_HARNESS_PREFIX="$RUNNER_TEMP/prefix" sh ./install.sh)
+          test "$p" = "$RUNNER_TEMP/prefix/bin/worktree-harness"
           "$RUNNER_TEMP/prefix/bin/worktree-harness" --version
       - name: Check that --help does no work
         run: WORKTREE_HARNESS_PREFIX="$RUNNER_TEMP/p2" sh ./install.sh --help >/dev/null && test ! -e "$RUNNER_TEMP/p2"

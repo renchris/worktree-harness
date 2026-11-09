@@ -61,10 +61,17 @@ usage() {
 
 # The subshells keep a closed stream from aborting an install that has started:
 # `set -e` kills a bare printf on a closed pipe even with SIGPIPE ignored.
-# say prints on stderr, out on stdout. C6 moves the out lines to stderr. Under
-# --json neither prints: the document and the error line are the only output.
-say() { if [ -z "$JSON" ]; then ( printf '%s\n' "$*" >&2 ) || :; fi; }
-out() { if [ -z "$JSON" ]; then ( printf '%s\n' "$*" ) 2>/dev/null || :; fi; }
+# Every human line goes to stderr: stdout holds only the installed path (print_path).
+# Under --json nothing prints: the document and the error line are the only output.
+say() { if [ -z "$JSON" ]; then ( printf '%s\n' "$*" ) >&2 2>/dev/null || :; fi; }
+
+# The installed command's path on stdout, for a caller that captures it. On an
+# interactive terminal the receipt already shows it, so it isn't repeated there.
+print_path() {
+  if [ ! -t 0 ] || [ ! -t 1 ] || [ ! -t 2 ] || [ -n "${CI:-}" ]; then
+    ( printf '%s\n' "$BIN_DIR/worktree-harness" ) 2>/dev/null || :
+  fi
+}
 
 # --- JSON (--json) ------------------------------------------------------------
 # Error reasons: invalid_arguments unknown_option conflict clone_failed internal_error canceled.
@@ -133,10 +140,11 @@ json_line() {
     "$jl_data" >&3 ) 2>/dev/null || :
 }
 
-# Rich output needs a terminal that can show it. Chosen once, on stdout's terminal.
+# Rich output needs a terminal that can show it. Chosen once, on stderr's terminal,
+# where every human line goes.
 pick_glyphs() {
   RICH=""
-  if [ -t 1 ]; then
+  if [ -t 2 ]; then
     case "${TERM:-dumb}" in
       dumb) ;;
       *) RICH=1 ;;
@@ -389,7 +397,7 @@ clone_source() {
 # Stage on the same filesystem, so the swap is two renames. They aren't atomic
 # together: SHARE_DIR is absent for the moment between them.
 install_files() {
-  out "${PROGRESS}Installing to $SHARE_DIR$ELLIPSIS"
+  say "${PROGRESS}Installing to $SHARE_DIR$ELLIPSIS"
   mkdir -p "$PREFIX/share" "$BIN_DIR" || tool_failed "$?" "Couldn't create the install directories under $PREFIX."
   # A `..` through a directory that didn't exist before the mkdir resolves only now.
   check_overlap
@@ -436,13 +444,13 @@ report_receipt() {
     version_text="$version_text ($commit_text)"
   fi
   if [ -n "$RICH" ]; then
-    out "${SUCCESS}Installed $installed_name"
-    out "$(row Path "$BIN_DIR/worktree-harness")"
-    out "$(row Version "$version_text")"
+    say "${SUCCESS}Installed $installed_name"
+    say "$(row Path "$BIN_DIR/worktree-harness")"
+    say "$(row Version "$version_text")"
   elif [ -n "$commit_text" ]; then
-    out "Installed $installed_name ($commit_text) to $BIN_DIR/worktree-harness."
+    say "Installed $installed_name ($commit_text) to $BIN_DIR/worktree-harness."
   else
-    out "Installed $installed_name to $BIN_DIR/worktree-harness."
+    say "Installed $installed_name to $BIN_DIR/worktree-harness."
   fi
   if [ "$STATE" != replaced ]; then return 0; fi
   if [ -z "$OLD_VERSION" ]; then
@@ -490,9 +498,9 @@ path_warning() {
     JSON_WARNINGS="${JSON_WARNINGS:+$JSON_WARNINGS,}{\"reason\":\"$1\",\"message\":$(json_str "$2${3:+ $3}")}"
     return 0
   fi
-  out ""
-  out "$WARNING$2"
-  if [ -n "${3:-}" ]; then out "    $3"; fi
+  say ""
+  say "$WARNING$2"
+  if [ -n "${3:-}" ]; then say "    $3"; fi
 }
 
 # The --json result. next ignores the guidance variable, because a caller needs it.
@@ -510,10 +518,10 @@ report_json() {
 
 # next_step <instruction> <command>...
 next_step() {
-  out ""
-  out "$1:"
+  say ""
+  say "$1:"
   shift
-  for ns_command do out "    $ns_command"; done
+  for ns_command do say "    $ns_command"; done
 }
 
 # Real commands for the detected shell only. They come after any PATH fix, because
@@ -546,8 +554,8 @@ report_offers() {
 
 report_next_steps() {
   if [ -n "${WH_GUIDANCE_DISABLED:-}" ]; then return 0; fi
-  out ""
-  out "Next steps:"
+  say ""
+  say "Next steps:"
   # `worktree-harness init` refuses outside a repository, and when .harnessrc exists.
   repo_root=""
   if command -v git >/dev/null 2>&1; then
@@ -822,7 +830,7 @@ main() {
     # An explicit template, because a bare `mktemp -d` ignores TMPDIR on macOS.
     CLEANUP=$(mktemp -d "${TMPDIR:-/tmp}/worktree-harness.XXXXXX") || tool_failed "$?" "Failed to create a temporary directory."
     TMP=$CLEANUP
-    out "${PROGRESS}Cloning $REPO_URL_SHOWN$ELLIPSIS"
+    say "${PROGRESS}Cloning $REPO_URL_SHOWN$ELLIPSIS"
     clone_source
     SRC="$TMP/worktree-harness"
   fi
@@ -836,7 +844,12 @@ main() {
 
   report_receipt
   report_path
-  if [ -n "$JSON" ]; then report_json; else report_next_steps; fi
+  if [ -n "$JSON" ]; then
+    report_json
+  else
+    report_next_steps
+    print_path
+  fi
 }
 
 # Called only here, so a truncated `curl | sh` body fails to parse or defines

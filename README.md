@@ -189,6 +189,8 @@ The location is `--prefix`, then `WORKTREE_HARNESS_PREFIX`, then `~/.local`; wit
 
 `WORKTREE_HARNESS_*` names are environment variables read by `install.sh` and the shell integration. `HARNESS_*` names are `.harnessrc` settings; exporting one in your shell has no effect.
 
+`install.sh` writes its progress, receipt and next steps to stderr. When captured or piped, or when `CI` is set, stdout is one line, the installed command's path, so `p=$(sh install.sh)` gives you the command to run. An interactive terminal shows only the receipt.
+
 For scripts, `sh install.sh --json` (piped: `curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh -s -- --json`) prints one document, indented on a terminal and on one line when piped:
 
 ```json

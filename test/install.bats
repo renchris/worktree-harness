@@ -30,16 +30,33 @@ common_version() { sed -n 's/^WH_VERSION="\(.*\)"$/\1/p' "$WH_ROOT/lib/common.sh
   assert_share_clean
 }
 
-@test "streams as of Wave B" {
+@test "streams: the receipt is on stderr, stdout only the installed path" {
   run --separate-stderr sh "$WH_ROOT/install.sh"
   [ "$status" -eq 0 ]
-  assert_has "$output" "Installed worktree-harness"
-  assert_has "$output" "$P/bin/worktree-harness"
+  assert_has "$stderr" "Installed worktree-harness"
   assert_has "$stderr" "(local checkout)"
+  assert_has "$stderr" "Next steps:"
+  [ "$output" = "$P/bin/worktree-harness" ]
   run --separate-stderr sh "$WH_ROOT/install.sh" --bogus
   [ "$status" -eq 2 ]
   [ -z "$output" ]
   assert_has "$stderr" "Unknown option --bogus"
+}
+
+@test "stdout is only the installed path" {
+  make_full_fixture
+  run --separate-stderr piped_install
+  [ "$status" -eq 0 ]
+  [ "$output" = "$P/bin/worktree-harness" ]
+  "$output" --version
+}
+
+@test "a failed install prints nothing on stdout" {
+  export WORKTREE_HARNESS_REPO="file:///nonexistent"
+  run --separate-stderr piped_install
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+  assert_has "$stderr" "Couldn't clone"
 }
 
 @test "install.sh is POSIX" {
