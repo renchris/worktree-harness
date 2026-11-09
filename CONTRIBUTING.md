@@ -45,6 +45,7 @@ git clone --depth 1 https://github.com/bats-core/bats-core /tmp/bats
 | `lib/config.sh` | `.harnessrc` loading, defaults, validation, base resolution |
 | `lib/pm.sh` | Package-manager detection + frozen-lockfile install command |
 | `lib/cmd_*.sh` | One file per command (`new`, `merge`, `gc`, `status`, `launch`, `init`, `doctor`) |
+| `lib/help_meta.sh` | Command metadata for `--help --json`, `help --all --json` and `help search`; `test/help.bats` checks help, parsers and completions against it |
 | `share/shell/*` | bash / zsh / fish integration snippets |
 | `test/*.bats` | Test suite (`test/helper.bash` holds fixtures) |
 

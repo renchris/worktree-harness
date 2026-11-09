@@ -339,7 +339,9 @@ isn't empty); empty or unset means off.
 | `gc [--prune] [--dry-run]` | Preview (default) or remove merged + clean + idle worktrees. Branches always preserved; removing a worktree deletes its ignored files such as `.env`. |
 | `init` | Scaffold a `.harnessrc` with your detected package manager. Never overwrites one. |
 | `doctor` | Diagnose the environment and validate `.harnessrc`. |
-| `help [<COMMAND>]` | Print the overview, or one command's help (same as `<COMMAND> --help`). |
+| `help [<COMMAND>] [--json]` | Print the overview, or one command's help (same as `<COMMAND> --help`). `--json` prints it as a document. |
+| `help --all [--json]` | Print every command's help; `--json` prints one document per command. |
+| `help search <QUERY> [--json]` | Find commands whose name, summary, options or examples contain `<QUERY>`. |
 
 Global options: `--cwd <DIR>` (run as if started in `<DIR>`), `--dry-run`, `--no-color`, `-v`/`--version`. They work before or after the command.
 

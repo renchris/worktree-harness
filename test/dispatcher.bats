@@ -70,27 +70,7 @@ lacks() { case "$1" in *"$2"*) printf 'unexpected: %s\nin: %s\n' "$2" "$1"; retu
   has "$output" "Unknown command nope for worktree-harness."
 }
 
-@test "help sends other arguments to the unknown-command path without _wh_help_ext" {
-  run "$WH" help --all --json
-  [ "$status" -eq 64 ]
-  has "$output" "Unknown command --all for worktree-harness."
-  run "$WH" help new --json
-  [ "$status" -eq 64 ]
-  has "$output" "Unknown command --json for worktree-harness."
-}
-
-@test "help sends other arguments to _wh_help_ext when it exists" {
-  _wh_help_ext() { printf 'ext:%s\n' "$*"; }
-  export -f _wh_help_ext
-  run "$WH" help --all --json
-  [ "$status" -eq 0 ]
-  [ "$output" = "ext:--all --json" ]
-  run "$WH" help new --json
-  [ "$status" -eq 0 ]
-  [ "$output" = "ext:new --json" ]
-  run "$WH" help nope
-  [ "$output" = "ext:nope" ]
-}
+# help's other forms (--all, --json, search) are lib/help_meta.sh's; test/help.bats covers them.
 
 @test "root help works without lib/" {
   mkdir "$BATS_TEST_TMPDIR/b"

@@ -258,6 +258,9 @@ main() {
   . "$WH_LIB/common.sh"
   # shellcheck source=../lib/compat.sh
   . "$WH_LIB/compat.sh"
+  # Help metadata: `<COMMAND> --help --json` can come from any command's parser.
+  # shellcheck source=../lib/help_meta.sh
+  . "$WH_LIB/help_meta.sh"
 
   # Warnings wait until the command's parser knows the output mode, or one would
   # reach stderr ahead of a `--json` document.

@@ -35,6 +35,10 @@ All notable changes are documented here. This project follows
   installed, replaced or found the same version `already installed`.
 - `docs/DESIGN.md` gains a glossary and a list of the CLI conventions the tool
   knowingly keeps out of, with the reason for each.
+- `worktree-harness help --all --json` and `<COMMAND> --help --json` print
+  machine-readable help for every command, and
+  `worktree-harness help search <QUERY> [--json]` finds commands by name,
+  summary, option or example.
 - `install.sh --json` (also `--json=true|false` and `--no-json`) prints one
   document on stdout with the install path and version, the outcome
   (`installed`, `replaced` or `unchanged`), the next command and any PATH
