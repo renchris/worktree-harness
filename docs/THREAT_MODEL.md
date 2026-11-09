@@ -15,9 +15,10 @@ so you can reason about running it and reading its code.
  trust        │  (same trust as  make · npm postinstall · just)    │
               └────────────────────┬───────────────────────────────┘
                                    │
-        WRITES only ───────────────┼──► repo · $HARNESS_WORKTREE_HOME · $PREFIX (install)
+        WRITES only ───────────────┼──► repo · $HARNESS_WORKTREE_HOME · $PREFIX + a temp dir (install)
                                    │
         NETWORK ───────────────────┼──► git fetch <remote> <branch>  (read-only; origin policy only)
+                                   │    git clone (installer, outside a checkout only)
                                    │
         NEVER ─────────────────────┴──► push · sudo · setuid · privilege escalation
 ```
@@ -29,11 +30,21 @@ so you can reason about running it and reading its code.
   tool uses (worktrunk hooks, wtp `post_create`, uzi `devCommand`). **Only run
   worktree-harness in repositories you trust.** Don't run it in a freshly-cloned
   untrusted repo without reading its `.harnessrc` first.
-- **No network beyond `git fetch`.** With `HARNESS_BASE_POLICY=origin` the tool
+- **At runtime, no network beyond `git fetch`, plus whatever the install/setup
+  commands you configured do.** With `HARNESS_BASE_POLICY=origin` the tool
   runs a read-only `git fetch <remote> <branch>` to resolve the base. With
-  `local` it does not touch the network at all. It never pushes.
+  `local` it does not touch the network at all. It never pushes. The install
+  command (`HARNESS_INSTALL`, or the one derived from your lockfile) and
+  `HARNESS_SETUP` run as written, so their network use is theirs.
 - **No privilege escalation.** No sudo, no setuid. It writes only inside the
-  repo, the configured worktree home, and `$PREFIX` at install time.
+  repo, the configured worktree home, and `$PREFIX` at install time, plus the
+  installer's temp dir described below.
+- **The installer.** Run as a file from a checkout, `install.sh` uses that
+  checkout and clones nothing. Otherwise it runs `git clone --depth 1` from
+  `WORKTREE_HARNESS_REPO` (default: the GitHub repo), at `WORKTREE_HARNESS_REF`
+  when set, into a new directory under `$TMPDIR` (else `/tmp`), and removes that
+  directory on exit, including after a failure or Ctrl+C. The cloned code is
+  what gets installed, so point that variable only at a source you trust.
 
 ## What it protects, and how
 

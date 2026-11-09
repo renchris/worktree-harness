@@ -10,10 +10,10 @@
 
 ```console
 $ worktree-harness new add-auth
-→ fetch origin main
-→ git worktree add ~/.worktrees/myapp/add-auth -b add-auth origin/main
-✓ copied 1 gitignored file(s)
-→ install: pnpm install --frozen-lockfile
+→ Fetching origin main…
+→ Creating worktree ~/.worktrees/myapp/add-auth on branch add-auth from origin/main…
+✓ copied 1 file
+→ Installing dependencies: pnpm install --frozen-lockfile…
 ✓ ports offset by 1 → ~/.worktrees/myapp/add-auth/.harness.env
 ✓ worktree ready: ~/.worktrees/myapp/add-auth  (branch: add-auth)
 
@@ -94,10 +94,10 @@ A guard that silently does nothing when it fails is worse than no guard, because
 
 - **Copies your gitignored state** — the files you declare in `HARNESS_COPY` (`.env`, `.env.local`, …), with `chmod 0600` on anything matching `*.env*` so secrets aren't world-readable.
 - **Runs the frozen-lockfile install** for your package manager, auto-detected from the lockfile: pnpm, npm, yarn (classic + berry), bun, uv, poetry, pipenv, pip, cargo, go.
-- **Assigns non-colliding ports** by offset and writes them to `<worktree>/.harness.env` — `source` it and your dev server and inspector won't fight the other worktrees.
+- **Assigns non-colliding ports** by offset and writes them to `<worktree>/.harness.env` — `source` it and your dev server and inspector won't fight the other worktrees. Each worktree gets the smallest free offset, so a removed worktree's ports are reused.
 - **Runs your setup** — whatever you put in `HARNESS_SETUP` (e.g. `pnpm db:setup`).
 
-`new` prints the worktree path on **stdout** (everything else is stderr), so you can capture it: `wt="$(worktree-harness new feat)"`.
+`new` prints the worktree path on **stdout** (everything else is stderr), so you can capture it: `wt="$(worktree-harness new feat)"`. If a copy, install or setup step fails, `new` exits 1, prints nothing on stdout, and names the worktree and branch it left behind with the commands to remove them.
 
 ## Landing back is fast-forward-only, gated, and never pushed
 
@@ -149,15 +149,71 @@ brew install renchris/tap/worktree-harness
 curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh
 ```
 
+Or download it first and run it only if the download succeeded (a lone `install.sh` clones the repository, like the piped form):
+
+```sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh && sh install.sh
+```
+
 Or from a checkout:
 
 ```sh
 git clone https://github.com/renchris/worktree-harness && ./worktree-harness/install.sh
 ```
 
-It installs to `~/.local` by default (override with `WORKTREE_HARNESS_PREFIX`): files go under `~/.local/share/worktree-harness`, and the `worktree-harness` command is symlinked into `~/.local/bin`. No sudo, no global state. To uninstall, delete those two paths.
+It installs to `~/.local` by default: files go under `~/.local/share/worktree-harness`, and the `worktree-harness` command is symlinked into `~/.local/bin`. No sudo, no global state. Run as a file from a checkout, it installs that checkout; otherwise it clones the repository into a temporary directory and removes it when done. A failed or cancelled install keeps the previous one.
 
 **Requirements:** `git` and `bash` ≥ 3.2 (i.e. stock macOS `/bin/bash`) — that's it.
+
+#### Installer options and variables
+
+`sh install.sh --help` prints these and does nothing else. Under `curl | sh`, pass options after `sh -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh -s -- --prefix <DIR>
+```
+
+| Option or variable | Meaning |
+|---|---|
+| `-h`, `--help` | Print usage and do nothing else (so does `help` as the first argument). |
+| `--version` | Print the installer's version without cloning anything. With `--json`, prints `{"version":"<v>"}`. |
+| `--json` | Print one JSON document on stdout and nothing on stderr (also `--json=true\|false`, `--no-json`). See below. |
+| `--prefix <DIR>`, `--prefix=<DIR>` | Install under `<DIR>`. A relative `<DIR>` is taken from the current directory. An empty value exits 2. |
+| `WORKTREE_HARNESS_PREFIX` | Install location when `--prefix` isn't given. |
+| `WORKTREE_HARNESS_REPO` | Git URL to clone when not run from a checkout (default `https://github.com/renchris/worktree-harness.git`). Point it only at a source you trust: the cloned code is what gets installed. |
+| `WORKTREE_HARNESS_REF` | Branch or tag to clone. Unset, the installer tracks `main`. |
+| `WH_GUIDANCE_DISABLED` | When not empty, hides the next steps and offers. PATH warnings still print. |
+| `CI` | When not empty, hides the shell-integration and completion offers. |
+
+The location is `--prefix`, then `WORKTREE_HARNESS_PREFIX`, then `~/.local`; with `HOME` unset and no prefix, the installer exits 2 and names `--prefix`. For every variable, empty means unset. Each is read once per run and never saved, so re-running without your custom prefix installs a second copy under `~/.local`; the uninstall, shell-integration and completion paths below also use your prefix in place of `~/.local`. Unknown options and stray arguments exit 2 and change nothing.
+
+`WORKTREE_HARNESS_*` names are environment variables read by `install.sh` and the shell integration. `HARNESS_*` names are `.harnessrc` settings; exporting one in your shell has no effect.
+
+For scripts, `sh install.sh --json` (piped: `curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh -s -- --json`) prints one document, indented on a terminal and on one line when piped:
+
+```json
+{"install":{"path":"<prefix>/bin/worktree-harness","version":"0.2.0"},"outcome":"installed","next":[{"command":"worktree-harness doctor","argv":["worktree-harness","doctor"]}]}
+```
+
+`outcome` is `installed`, `replaced` or `unchanged`; `version` is `null` when unknown; `next` uses the absolute path when the bin directory isn't on `PATH`; a `warnings` array (`reason` `not_on_path` or `shadowed`, plus a `message`) appears only when there are warnings. A failure prints nothing on stdout and exactly one line on stderr, `{"status":"error","reason":"<reason>","message":"…"}`, with the same exit code as without `--json`; the reason is one of `invalid_arguments`, `unknown_option`, `conflict`, `clone_failed`, `internal_error` or `canceled`. Under `--json`, git never prompts for credentials, and a prefix containing a control character is refused before anything is written.
+
+#### Upgrade
+
+Re-run the installer with the same prefix. It installs the tip of `main` unless `WORKTREE_HARNESS_REF` pins a tag, and its receipt names the version and commit (or says `already installed`). Only the latest released tag receives fixes ([`SECURITY.md`](SECURITY.md)); to stay on a release, pin it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | WORKTREE_HARNESS_REF=v0.2.0 sh
+```
+
+Homebrew users run `brew upgrade worktree-harness`.
+
+#### Uninstall
+
+```sh
+rm -rf -- ~/.local/share/worktree-harness ~/.local/bin/worktree-harness
+```
+
+That removes only the installer's two paths, not the rest of `~/.local/bin`; with a custom prefix, use `<DIR>/share/worktree-harness` and `<DIR>/bin/worktree-harness`. Then delete any shell-integration or completion lines you added. For a Homebrew install, run `brew uninstall worktree-harness`.
 
 ## Quickstart
 
@@ -182,10 +238,23 @@ main checkout it isolates; from a linked worktree or outside a repo it runs in
 place:
 
 ```sh
-# in ~/.zshrc (or ~/.bashrc; fish supported too)
+# in ~/.zshrc
 export WORKTREE_HARNESS_AGENTS="claude"   # space-separated; e.g. "claude aider"
 source ~/.local/share/worktree-harness/share/shell/zsh.sh
 ```
+
+For bash, put the same `export` in `~/.bashrc` and source `share/shell/bash.sh`
+instead. For fish, in `~/.config/fish/config.fish`:
+
+```fish
+set -gx WORKTREE_HARNESS_AGENTS claude        # e.g. claude aider
+source ~/.local/share/worktree-harness/share/shell/fish.fish
+```
+
+Source it after `worktree-harness` is on your `PATH`, and with a custom prefix
+use `<DIR>/share/worktree-harness/...` in place of
+`~/.local/share/worktree-harness/...`. The installer prints the line for your
+shell with the real path.
 
 Now typing `claude` in a project root spins up an isolated worktree and launches
 the agent there. Override once with `WH_ISOLATION_SKIP=1 claude`.
@@ -194,8 +263,17 @@ the agent there. Override once with `WH_ISOLATION_SKIP=1 claude`.
 
 The Homebrew formula installs bash, zsh, and fish completions automatically. With
 the `curl` installer they ship under
-`~/.local/share/worktree-harness/share/completions/` — source the one for your
-shell (e.g. add `source .../worktree-harness.bash` to `~/.bashrc`).
+`~/.local/share/worktree-harness/share/completions/`; the installer prints the
+step for your shell:
+
+```sh
+# bash, in ~/.bashrc
+source ~/.local/share/worktree-harness/share/completions/worktree-harness.bash
+# zsh, in ~/.zshrc, before compinit
+fpath=(~/.local/share/worktree-harness/share/completions $fpath)
+# fish, once
+cp ~/.local/share/worktree-harness/share/completions/worktree-harness.fish ~/.config/fish/completions/
+```
 
 ## Configure once in `.harnessrc`
 
@@ -211,12 +289,13 @@ Scaffold one with `worktree-harness init`. Every key is optional.
 | `HARNESS_DEFAULT_BRANCH` | *(auto)* | Blank → auto-detect (`origin/HEAD`, then `main`/`master`) |
 | `HARNESS_WORKTREE_HOME` | `$HOME/.worktrees` | Worktrees live at `<home>/<repo>/<branch>` |
 | `HARNESS_COPY` | `()` | Gitignored files copied (not symlinked) into each worktree, e.g. `( ".env" ".env.local" )` |
-| `HARNESS_PACKAGE_MANAGER` | `auto` | `auto` detects from the lockfile; or pin `pnpm`/`npm`/`yarn`/`bun`/`pip`/`poetry`/`uv`/`cargo`/`go`/`none` |
+| `HARNESS_PACKAGE_MANAGER` | `auto` | `auto` detects from the lockfile; or pin `pnpm`/`npm`/`yarn`/`bun`/`pip`/`pipenv`/`poetry`/`uv`/`cargo`/`go`/`none`. Any other value is a warning, and `new` skips the install |
 | `HARNESS_INSTALL` | `auto` | `auto` derives the frozen-lockfile command from the PM; `none`; or a literal command |
 | `HARNESS_SETUP` | `()` | Commands run inside the worktree after install, e.g. `( "pnpm db:setup" )` |
-| `HARNESS_PORTS` | `()` | `"NAME=BASE"` → `NAME=BASE+offset`, written to `<worktree>/.harness.env` |
+| `HARNESS_PORTS` | `()` | `"NAME=BASE"` → `NAME=BASE+offset`, written to `<worktree>/.harness.env`. `NAME` is a shell identifier and `BASE` is digits |
 | `HARNESS_MERGE_GATE` | `none` | Command that must pass before `merge` fast-forwards, e.g. `"pnpm typecheck"` |
 | `HARNESS_AGENT` | `claude` | What `launch` execs inside the worktree |
+| `HARNESS_BRANCH_PREFIX` | `wt` | Prefix of the branches `launch` names for you: `<prefix>-<HHMMSS>-<pid>` |
 | `HARNESS_GC_KEEP` | `()` | Worktree basenames `gc` must never reap |
 | `HARNESS_GC_IDLE_MIN` | `30` | `gc` keeps worktrees touched more recently than this (minutes; `0` disables) |
 
@@ -230,19 +309,56 @@ Scaffold one with `worktree-harness init`. Every key is optional.
 See [`examples/`](examples/) for ready-to-copy configs (Node/pnpm, Python/uv,
 and a multi-service setup).
 
+`worktree-harness doctor` checks these settings and exits with the number of
+blocking issues it found (0 means none).
+
+### Environment variables
+
+These apply to one run and are not `.harnessrc` settings (exporting a
+`HARNESS_*` name in your shell has no effect).
+
+| Variable | Effect |
+|---|---|
+| `WH_NO_FETCH=1` | `new`, `launch` and `merge` use the last-known remote ref instead of fetching. `--dry-run` never fetches |
+| `WH_ISOLATION_SKIP=1` | `launch` (and the shell integration) runs in place on the main checkout, with no worktree |
+| `WH_DRY_RUN=1` | Same as `--dry-run` |
+| `WH_NO_COLOR=1`, `NO_COLOR` | Turn off color. `FORCE_COLOR` turns it on when output isn't a terminal; `--no-color` beats `NO_COLOR`, which beats `FORCE_COLOR` |
+| `WH_GUIDANCE_DISABLED=1` | Hides optional next steps and offers, in the CLI and `install.sh`. Required warnings still print |
+
+The `WH_*` switches are on at `1` (`WH_GUIDANCE_DISABLED` at any value that
+isn't empty); empty or unset means off.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `new <branch>` | Create + provision a worktree off the base branch. `--dry-run` to preview. |
-| `launch [-- <cmd…>]` | Create an auto-named worktree and exec your agent in it; in a linked worktree or outside a repo, exec in place. |
+| `new <BRANCH>` | Create + provision a worktree off the base branch. `--dry-run` to preview. |
+| `launch [-- <COMMAND> [<ARG>]...]` | Create an auto-named worktree and exec your agent in it; in a linked worktree or outside a repo, exec in place. |
 | `merge [--no-verify]` | Rebase the current worktree's branch onto the base, run the gate, fast-forward the local default branch. Never pushes. |
-| `status [--porcelain]` | List worktrees: branch, ahead/behind, dirty, assigned ports. |
-| `gc [--prune]` | Preview (default) or remove merged + clean + idle worktrees. Branches always preserved. |
-| `init` | Scaffold a `.harnessrc` with your detected package manager. |
+| `status [--porcelain\|--json]` | List worktrees: branch, ahead/behind, dirty, assigned ports. `--json --fields <FIELDS>` keeps only the keys you name. |
+| `gc [--prune] [--dry-run]` | Preview (default) or remove merged + clean + idle worktrees. Branches always preserved; removing a worktree deletes its ignored files such as `.env`. |
+| `init` | Scaffold a `.harnessrc` with your detected package manager. Never overwrites one. |
 | `doctor` | Diagnose the environment and validate `.harnessrc`. |
+| `help [<COMMAND>]` | Print the overview, or one command's help (same as `<COMMAND> --help`). |
 
-Global flags: `-C <dir>` (run as if in `<dir>`), `--dry-run`, `--no-color`.
+Global options: `--cwd <DIR>` (run as if started in `<DIR>`), `--dry-run`, `--no-color`, `-v`/`--version`. They work before or after the command.
+
+Exit codes: 0 success; 1 error or usage error; 2 `merge` rebase conflict; 64 unknown command; `doctor` exits with the number of blocking issues; `launch` passes through its command's exit code.
+
+### Scripting
+
+Each command keeps stdout for its result and sends progress, warnings and errors to stderr:
+
+| Command | Stdout |
+|---|---|
+| `new` | The worktree path (also with `--dry-run`) |
+| `merge` | The landed commit's full SHA, also when the branch had already landed; nothing with `--dry-run` |
+| `init` | The new `.harnessrc` path |
+| `gc --prune` | The removed paths, one per line, only when every removal succeeded |
+| `status --porcelain` | Tab-separated rows: kind, branch, `+ahead/-behind`, ports, path |
+| `status --json` | One document: `worktrees[]` of `{kind, branch, dirty, ahead, behind, ports, path}` (`kind` is `main` or `linked`; `ahead` and `behind` are `null` for the main checkout, and any of `dirty`, `ahead` and `behind` is `null` when git couldn't answer; `ports` is keyed by name) and `pagination: {next: null}` |
+
+At an interactive terminal, `merge` and `init` show a readable receipt in place of the bare value, and `gc --prune` keeps its paths off stdout. Piped `status` with neither option prints tab-separated rows with a header (`KIND`, `BRANCH`, `DIRTY`, `AHEAD`, `BEHIND`, `PORTS`, `PATH`) and puts the summary line on stderr; scripts should use `--porcelain` or `--json`. A `--json` failure is one JSON line on stderr.
 
 ## How it compares
 

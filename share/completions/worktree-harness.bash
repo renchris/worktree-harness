@@ -1,15 +1,30 @@
 # bash completion for worktree-harness
 _worktree_harness() {
-  local cur cmds sub i
+  local cur prev cmds sub i
   cur="${COMP_WORDS[COMP_CWORD]}"
+  prev=""
+  [ "$COMP_CWORD" -gt 0 ] && prev="${COMP_WORDS[COMP_CWORD-1]}"
   cmds="new launch merge gc status init doctor help version"
 
-  # Find the subcommand: first non-flag word after the program (skip -C <dir>).
+  # A directory after --cwd; a field name after status --fields.
+  case "$prev" in
+    --cwd|-C)
+      # shellcheck disable=SC2207
+      COMPREPLY=( $(compgen -d -- "$cur") )
+      return ;;
+    --fields)
+      # shellcheck disable=SC2207
+      COMPREPLY=( $(compgen -W "kind branch dirty ahead behind ports path" -- "$cur") )
+      return ;;
+  esac
+
+  # Find the command: the first word after the program that isn't an option
+  # (skip --cwd <DIR>).
   sub=""
   i=1
   while [ "$i" -lt "$COMP_CWORD" ]; do
     case "${COMP_WORDS[i]}" in
-      -C) i=$((i + 2)); continue ;;
+      --cwd|-C) i=$((i + 2)); continue ;;
       -*) i=$((i + 1)); continue ;;
       *)  sub="${COMP_WORDS[i]}"; break ;;
     esac
@@ -17,19 +32,20 @@ _worktree_harness() {
 
   if [ -z "$sub" ]; then
     # shellcheck disable=SC2207
-    COMPREPLY=( $(compgen -W "$cmds -C --dry-run --no-color --help --version" -- "$cur") )
+    COMPREPLY=( $(compgen -W "$cmds --cwd --dry-run --no-color --help --version" -- "$cur") )
     return
   fi
 
-  local flags="--help"
+  local opts="--help"
   case "$sub" in
-    new|launch|init) flags="--dry-run --help" ;;
-    merge)           flags="--no-verify --dry-run --help" ;;
-    gc)              flags="--prune --dry-run --help" ;;
-    status)          flags="--porcelain --help" ;;
-    doctor)          flags="--help" ;;
+    new|launch|init) opts="--dry-run --help" ;;
+    merge)           opts="--no-verify --dry-run --help" ;;
+    gc)              opts="--prune --dry-run --yes -y --help" ;;
+    status)          opts="--porcelain --json --fields --help" ;;
+    doctor)          opts="--help" ;;
+    help)            opts="$cmds" ;;
   esac
   # shellcheck disable=SC2207
-  COMPREPLY=( $(compgen -W "$flags" -- "$cur") )
+  COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
 }
 complete -F _worktree_harness worktree-harness
