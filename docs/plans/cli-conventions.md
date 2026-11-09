@@ -1378,3 +1378,28 @@ Section 7 records the first round-2 integration and is unchanged except for the 
 | D-R2-17 | (a): `worktree-harness <v>` bytes stay | Keeps today |
 | D-R2-18 | Not reached (C2 kept) | n/a |
 | D-R2-19 | (a): filed as a documentation defect | No behaviour either way |
+
+**Landed (2026-11-06 to 2026-11-09), one commit per unit, each gated green (shellcheck, `sh -n`/`dash -n`, bats on default bash and `/bin/bash` 3.2, install smoke) and verified on `origin/main` by `git ls-tree`.**
+
+| Unit | Commit | Notes |
+|---|---|---|
+| U-A1 | `5bd9586` | |
+| U-A2 | `51f619d` | |
+| U-B1 | `69049af` | Teammate stopped at an account limit; lead finished it |
+| U-B2 | `9d0a711` | |
+| U-B3 | `d8da17e` | |
+| U-B4 | `c54b69a` + `b8bb5df` | `b8bb5df`: Linux coreutils `printf --help` broke one test; it now uses the shell's printf |
+| U-B5 | `950b5c5` | Lead finished it after the account limit |
+| U-B6 | `361db44` | |
+| U-B7 | `6aba06d` | Lead finished it after the account limit |
+| U-B8 | `6589c98` | |
+| U-B9 | `84da53d` | Lead removed two U-B1 stub tests that pinned pre-U-B9 `help` routing; `test/help.bats` covers it |
+| U-B10 | `1f803b8` | Lead finished it after the account limit |
+| U-B11 | `917aaff` | |
+| C4 | `985171b` | |
+| C6 | `a23b61a` | |
+| C8 | `f05e8ec` | Quoted `~` rule not applied (D-R2-12 (b)) |
+
+Kept by packet `ad226c7513ea` (recorded in `docs/DESIGN.md` `## Exceptions`): C1, C2, C3, C5, C7, C8's `~` rule. Open class-B packet `4f656e6737cc` covers the smaller choices above. No release or tag.
+
+**Learnings.** On this machine one gate run took 1 to 7 hours (load 50 to 440; the bats wrapper refuses runs above its ceiling). Stacking units on one tree, gating once and landing one commit at a time saved hours. Write `${var}…`, never `$var…`: bash 3.2 reads the ellipsis's first byte into the name under `set -u`.
