@@ -51,6 +51,9 @@ All notable changes are documented here. This project follows
 - `install.sh` prints only the installed command's path on stdout (when
   captured, piped or under `CI`); progress, receipt and next steps moved to
   stderr.
+- `install.sh`: a failed clone exits 1 (was git's 128) and no longer prompts
+  for credentials (set `GIT_TERMINAL_PROMPT=1` to allow it); a
+  `WORKTREE_HARNESS_REPO` starting with a dash exits 2.
 - Help goes to stdout. Root help is grouped by task, with `Usage:`,
   `Commands:`, `Global Options:` and `Learn more:` headings and a Notes block
   of exit codes.

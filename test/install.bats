@@ -54,7 +54,7 @@ common_version() { sed -n 's/^WH_VERSION="\(.*\)"$/\1/p' "$WH_ROOT/lib/common.sh
 @test "a failed install prints nothing on stdout" {
   export WORKTREE_HARNESS_REPO="file:///nonexistent"
   run --separate-stderr piped_install
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   [ -z "$output" ]
   assert_has "$stderr" "Couldn't clone"
 }
@@ -302,12 +302,12 @@ common_version() { sed -n 's/^WH_VERSION="\(.*\)"$/\1/p' "$WH_ROOT/lib/common.sh
 @test "credentials in the repo URL are never printed" {
   run --separate-stderr env WORKTREE_HARNESS_REPO='https://user:s3cret@127.0.0.1:9/x.git' \
     sh -c 'cd "$1" && exec sh -s < "$2"' _ "$EMPTY" "$WH_ROOT/install.sh"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   assert_has "$stderr" "https://127.0.0.1:9/x.git"
   assert_lacks "$output$stderr" "s3cret"
   run --separate-stderr env WORKTREE_HARNESS_REPO='https://user:p@ss@127.0.0.1:9/x.git' \
     sh -c 'cd "$1" && exec sh -s < "$2"' _ "$EMPTY" "$WH_ROOT/install.sh"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   assert_lacks "$output$stderr" "ss@"
 }
 
@@ -404,7 +404,7 @@ common_version() { sed -n 's/^WH_VERSION="\(.*\)"$/\1/p' "$WH_ROOT/lib/common.sh
   touch "$P/share/worktree-harness/previous"
   export WORKTREE_HARNESS_REPO="file:///nonexistent"
   run --separate-stderr piped_install
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   [ -e "$P/share/worktree-harness/previous" ]
   "$P/bin/worktree-harness" --version
   assert_share_clean

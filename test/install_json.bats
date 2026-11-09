@@ -110,17 +110,17 @@ line_count() { printf '%s\n' "$1" | grep -c .; }
   need_python
   export WORKTREE_HARNESS_REPO="file:///nonexistent"
   run --separate-stderr piped_install --json
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   [ -z "$output" ]
   [ "$(line_count "$stderr")" -eq 1 ]
   assert_has "$stderr" '"reason":"clone_failed"'
   [ "$(jq_ "$stderr" 'd["status"]')" = error ]
   [ -z "$(ls -A "$TMPDIR")" ]
 
-  # A failed clone keeps git's exit code.
+  # A failed clone exits 1 whatever git's own code was.
   make_shim git 'exit 3'
   PATH="$SHIMS:$PATH" run --separate-stderr piped_install --json
-  [ "$status" -eq 3 ]
+  [ "$status" -eq 1 ]
   [ "$(line_count "$stderr")" -eq 1 ]
 }
 

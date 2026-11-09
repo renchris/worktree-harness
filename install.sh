@@ -365,15 +365,16 @@ read_source_commit() {
 
 # Clone into $TMP. Git's stderr stays out of the headline: the first fatal: or error:
 # line is the one that names the cause, and its last line is often only advice.
-# Stdin is closed so the clone can't read the rest of a piped script. The low-speed
-# settings cover HTTP(S) stalls only.
+# Stdin is closed so the clone can't read the rest of a piped script, and git never
+# prompts for credentials on the terminal unless GIT_TERMINAL_PROMPT=1 asks it to.
+# The low-speed settings cover HTTP(S) stalls only.
 clone_source() {
   set -- clone --depth 1
   if [ -n "${WORKTREE_HARNESS_REF:-}" ]; then
     set -- "$@" --branch "$WORKTREE_HARNESS_REF"
   fi
   # In the background, so TERM to this shell doesn't wait for the clone to end.
-  git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "$@" -- "$REPO_URL" "$TMP/worktree-harness" \
+  GIT_TERMINAL_PROMPT="${GIT_TERMINAL_PROMPT:-0}" git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "$@" -- "$REPO_URL" "$TMP/worktree-harness" \
     </dev/null >/dev/null 2>"$TMP/clone.err" &
   CHILD=$!
   rc=0
@@ -387,9 +388,9 @@ clone_source() {
   if [ -z "$detail" ]; then
     detail=$(printf '%s\n' "$clone_err" | grep . | tail -n 1) || detail=""
   fi
-  # A failed clone keeps git's own code until C8.
+  # Exit 1, not git's own code: 128 would read as a signal. 128+n exited above.
   FAIL_REASON=clone_failed
-  fail "$rc" "Couldn't clone $REPO_URL_SHOWN. Nothing was changed." \
+  fail 1 "Couldn't clone $REPO_URL_SHOWN. Nothing was changed." \
     "git: ${detail:-no error text (exit $rc)}" \
     "Check access to the repository" "git ls-remote -- $(shq "$REPO_URL_SHOWN")"
 }
@@ -791,6 +792,12 @@ main() {
   # Only git clone sees the raw URL; every printed line uses this one. With no sed
   # to redact it, print a name rather than a URL that may hold a password.
   REPO_URL_SHOWN=$(printf '%s' "$REPO_URL" | sed 's#://[^/]*@#://#' 2>/dev/null) || REPO_URL_SHOWN="worktree-harness"
+  # Refused before any write, and only when the clone would use it.
+  if [ -z "$SELF_DIR" ]; then
+    case "$REPO_URL" in
+      -*) usage_error "WORKTREE_HARNESS_REPO must be a repository URL, got: $REPO_URL_SHOWN." ;;
+    esac
+  fi
 
   PHASE=before
   STAGE=""

@@ -191,6 +191,8 @@ The location is `--prefix`, then `WORKTREE_HARNESS_PREFIX`, then `~/.local`; wit
 
 `install.sh` writes its progress, receipt and next steps to stderr. When captured or piped, or when `CI` is set, stdout is one line, the installed command's path, so `p=$(sh install.sh)` gives you the command to run. An interactive terminal shows only the receipt.
 
+The clone never prompts for credentials; set `GIT_TERMINAL_PROMPT=1` to allow a prompt. A failed clone exits 1, a usage error (including a `WORKTREE_HARNESS_REPO` that starts with a dash) exits 2, and a signal exits 128 plus the signal number.
+
 For scripts, `sh install.sh --json` (piped: `curl -fsSL https://raw.githubusercontent.com/renchris/worktree-harness/main/install.sh | sh -s -- --json`) prints one document, indented on a terminal and on one line when piped:
 
 ```json

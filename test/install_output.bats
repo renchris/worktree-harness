@@ -53,7 +53,7 @@ run_script_in_pty() {
 @test "a failed clone exits 1, says why, leaks nothing" {
   export WORKTREE_HARNESS_REPO="file:///nonexistent"
   run --separate-stderr piped_install
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   assert_has "$stderr" "Couldn't clone"
   [ ! -e "$P/bin/worktree-harness" ]
   [ -z "$(ls -A "$TMPDIR")" ]
@@ -62,7 +62,7 @@ run_script_in_pty() {
 @test "streams: a failed clone's progress and message are on stderr" {
   export WORKTREE_HARNESS_REPO="file:///nonexistent"
   run --separate-stderr piped_install
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   assert_has "$stderr" "Error: Couldn't clone file:///nonexistent. Nothing was changed."
   assert_has "$stderr" "Cloning file:///nonexistent..."
   [ -z "$output" ]
@@ -71,7 +71,7 @@ run_script_in_pty() {
 @test "a failed clone shows a Detail row and one recovery command" {
   export WORKTREE_HARNESS_REPO="file:///nonexistent"
   run --separate-stderr piped_install
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   assert_has "$stderr" "Couldn't clone"
   assert_has "$stderr" "  Detail          git: "
   has_line "$stderr" "    git ls-remote -- file:///nonexistent"
@@ -79,17 +79,51 @@ run_script_in_pty() {
   [ -z "$(ls -A "$TMPDIR")" ]
 }
 
-@test "a failed clone keeps git's exit code and says when git said nothing" {
+@test "a failed clone exits 1, not git's code, and says when git said nothing" {
   make_shim git 'exit 3'
   PATH="$SHIMS:$PATH" run --separate-stderr piped_install
-  [ "$status" -eq 3 ]
+  [ "$status" -eq 1 ]
   assert_has "$stderr" "git: no error text (exit 3)"
+}
+
+# record_prompt_setting — a git that records GIT_TERMINAL_PROMPT as the clone saw it,
+# then fails the way git does, without contacting any host.
+record_prompt_setting() {
+  export BATS_TEST_TMPDIR
+  make_shim git 'printf "%s\n" "${GIT_TERMINAL_PROMPT-unset}" > "$BATS_TEST_TMPDIR/prompt"; echo "fatal: no" >&2; exit 128'
+}
+
+@test "a prompt is never attempted" {
+  record_prompt_setting
+  unset GIT_TERMINAL_PROMPT
+  PATH="$SHIMS:$PATH" run --separate-stderr piped_install
+  [ "$status" -eq 1 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/prompt")" = 0 ]
+}
+
+@test "GIT_TERMINAL_PROMPT=1 is honoured" {
+  record_prompt_setting
+  GIT_TERMINAL_PROMPT=1 PATH="$SHIMS:$PATH" run --separate-stderr piped_install
+  [ "$status" -eq 1 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/prompt")" = 1 ]
+}
+
+@test "a dash-leading repo URL is a usage error" {
+  export BATS_TEST_TMPDIR
+  make_shim git 'touch "$BATS_TEST_TMPDIR/git-ran"; exec "$REAL" "$@"'
+  WORKTREE_HARNESS_REPO=--bogus PATH="$SHIMS:$PATH" run --separate-stderr piped_install
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  assert_has "$stderr" "WORKTREE_HARNESS_REPO must be a repository URL, got: --bogus."
+  [ ! -e "$BATS_TEST_TMPDIR/git-ran" ]
+  [ ! -e "$P" ]
+  [ -z "$(ls -A "$TMPDIR")" ]
 }
 
 @test "the Detail row is git's first fatal line, not its last line" {
   make_shim git 'printf "Cloning into x...\nfatal: the cause\nfatal: the generic line\nhint: advice\n" >&2; exit 128'
   PATH="$SHIMS:$PATH" run --separate-stderr piped_install
-  [ "$status" -eq 128 ]
+  [ "$status" -eq 1 ]
   has_line "$stderr" "  Detail          git: fatal: the cause"
   assert_lacks "$stderr" "the generic line"
   assert_lacks "$stderr" "advice"
@@ -104,13 +138,13 @@ run_script_in_pty() {
 @test "a URL credential never reaches the Detail row" {
   export WORKTREE_HARNESS_REPO='https://user:p@ss@127.0.0.1:9/x.git'
   run --separate-stderr piped_install
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   assert_lacks "$output$stderr" "p@ss"
   assert_lacks "$output$stderr" "ss@"
   # The same, when git repeats the URL as it was given.
   make_shim git 'printf "fatal: unable to access '"'"'https://user:p@ss@127.0.0.1:9/x.git/'"'"'\n" >&2; exit 128'
   PATH="$SHIMS:$PATH" run --separate-stderr piped_install
-  [ "$status" -eq 128 ]
+  [ "$status" -eq 1 ]
   assert_has "$stderr" "git: fatal: unable to access 'https://127.0.0.1:9/x.git/'"
   assert_lacks "$output$stderr" "p@ss"
   assert_lacks "$output$stderr" "ss@"
@@ -567,7 +601,7 @@ run_script_in_pty() {
 @test "plain failures start with Error:" {
   export WORKTREE_HARNESS_REPO="file:///nonexistent"
   run piped_install
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   [ "$(printf '%s' "$output" | LC_ALL=C tr -d '\011\012\040-\176' | wc -c | tr -d ' ')" = 0 ]
   printf '%s\n' "$output" | grep -q "^Error: Couldn't clone"
 }
